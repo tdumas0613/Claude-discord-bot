@@ -124,7 +124,7 @@ TypeScript is pinned to 6.x because ts-jest currently declares `typescript >=4.3
 ## Continuous integration
 
 `.github/workflows/ci.yml` type-checks, builds, and runs the tests on every push and pull
-request, against Node 20 and Node 22.
+request, against Node 22.
 
 ## Safety notes
 
