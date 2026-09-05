@@ -17,7 +17,7 @@ const config: Config = {
   },
   testMatch: ['**/tests/**/*.test.ts'],
   clearMocks: true,
-  collectCoverageFrom: ['src/**/*.ts', '!src/index.ts', '!src/deploy-commands.ts'],
+  collectCoverageFrom: ['src/**/*.ts', '!src/index.ts', '!src/register-slash-commands.ts'],
 };
 
 export default config;

@@ -17,14 +17,14 @@ npm test -- tests/roast.test.ts      # one file
 npm test -- -t "enables server-side" # one test by name
 npm run test:coverage                # coverage (currently 100% on covered modules)
 npm start                            # builds first via prestart, then runs dist/index.js
-npm run deploy                       # builds first via predeploy, registers /roast
+npm run register                     # builds first via preregister, registers /roast
 ```
 
 `npm test` shells out to `node --experimental-vm-modules node_modules/jest/bin/jest.js`
 rather than the `jest` binary — Jest needs that flag for native ESM. The
 `ExperimentalWarning: VM Modules` line it prints is expected, not a problem.
 
-Slash commands must be registered with Discord before they appear. `npm run deploy` writes
+Slash commands must be registered with Discord before they appear. `npm run register` writes
 to one guild when `DISCORD_GUILD_ID` is set (instant) and globally otherwise (up to an hour
 to propagate). Re-run it whenever `src/commands.ts` changes.
 
@@ -32,12 +32,13 @@ to propagate). Re-run it whenever `src/commands.ts` changes.
 
 Flow: `index.ts` (client + login) → `interaction.ts` (routing, replies) → `roast.ts`
 (prompt + API call). `config.ts` sits underneath everything; `commands.ts` is shared
-between the bot and `deploy-commands.ts`.
+between the bot and `register-slash-commands.ts`.
 
 The split exists for testability. `index.ts` calls `client.login()` at import time, so the
 handler lives in `interaction.ts` where a test can import it without touching the network.
 Keep it that way — moving logic back into `index.ts` makes it untestable, and `index.ts`
-and `deploy-commands.ts` are excluded from coverage precisely because they act on import.
+and `register-slash-commands.ts` are excluded from coverage precisely because they act on
+import.
 
 `config.ts` calls `process.exit(1)` at import time when a required variable is missing.
 Anything importing it transitively (which is nearly everything) will kill the process

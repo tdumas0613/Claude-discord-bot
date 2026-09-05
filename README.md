@@ -67,6 +67,9 @@ limits; use them.
 
 ## Setup
 
+Short version below. For a step-by-step walkthrough — creating the Discord application,
+making the bot private, inviting it, and troubleshooting — see **[SETUP.md](SETUP.md)**.
+
 1. **Install dependencies**
 
    ```bash
@@ -98,7 +101,7 @@ limits; use them.
 5. **Register the slash command**
 
    ```bash
-   npm run deploy
+   npm run register
    ```
 
    With `DISCORD_GUILD_ID` set, the command registers to that server and is available
@@ -125,14 +128,14 @@ an acknowledgement within three seconds, and the API call takes longer. It then 
 `roast.ts`, which owns the system prompt and the Claude request, and posts whatever comes
 back.
 
-| File                     | Role                                                    |
-| ------------------------ | ------------------------------------------------------- |
-| `src/index.ts`           | Creates the client, wires up events, logs in            |
-| `src/interaction.ts`     | Handles the `/roast` interaction and formats replies    |
-| `src/roast.ts`           | System prompt and the Claude API call                   |
-| `src/commands.ts`        | Slash command definition, shared with the deploy script |
-| `src/deploy-commands.ts` | Registers the command with Discord                      |
-| `src/config.ts`          | Loads and validates environment variables               |
+| File                             | Role                                                          |
+| -------------------------------- | ------------------------------------------------------------- |
+| `src/index.ts`                   | Creates the client, wires up events, logs in                  |
+| `src/interaction.ts`             | Handles the `/roast` interaction and formats replies          |
+| `src/roast.ts`                   | System prompt and the Claude API call                         |
+| `src/commands.ts`                | Slash command definition, shared with the registration script |
+| `src/register-slash-commands.ts` | Registers the command with Discord (`npm run register`)       |
+| `src/config.ts`                  | Loads and validates environment variables                     |
 
 The split between `index.ts` and `interaction.ts` exists so the handler can be imported by
 a test without logging into Discord. Worth preserving.
@@ -163,8 +166,8 @@ npm run typecheck   # tsc over src/ and tests/, no output
 npm run build       # compile src/ to dist/
 ```
 
-`npm start` and `npm run deploy` build first (via `prestart` / `predeploy`) and then run the
-compiled output from `dist/`, so a fresh clone works without a separate build step.
+`npm start` and `npm run register` build first (via `prestart` / `preregister`) and then
+run the compiled output from `dist/`, so a fresh clone works without a separate build step.
 
 Two config files: `tsconfig.json` type-checks everything including tests, and
 `tsconfig.build.json` extends it to emit `src/` into `dist/`. Module resolution is
@@ -194,7 +197,7 @@ Discord interaction are stubbed.
 Note that the prompt's guardrails are asserted by tests — loosening the system prompt will
 fail the suite, which is intentional.
 
-`src/index.ts` and `src/deploy-commands.ts` are excluded from coverage; they are thin
+`src/index.ts` and `src/register-slash-commands.ts` are excluded from coverage; they are thin
 wiring that logs in or calls Discord's REST API on import.
 
 ## Continuous integration
