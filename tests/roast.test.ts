@@ -1,13 +1,36 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-const create = jest.fn();
-const constructorOptions = [];
+/** The subset of the Messages API request this suite asserts on. */
+interface RoastRequest {
+  model: string;
+  max_tokens: number;
+  betas: string[];
+  fallbacks: string;
+  output_config: { effort: string };
+  system: string;
+  messages: Array<{ role: string; content: string }>;
+}
+
+type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string };
+
+/** The subset of the Messages API response this suite stubs. */
+interface RoastResponse {
+  content: ContentBlock[];
+  stop_reason: string;
+  stop_details: { type: string; category: string; explanation: string } | null;
+}
+
+const create = jest.fn<(params: RoastRequest) => Promise<RoastResponse>>();
+const constructorOptions: unknown[] = [];
 
 jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
   default: class MockAnthropic {
-    constructor(options) {
+    beta = { messages: { create } };
+
+    constructor(options: unknown) {
       constructorOptions.push(options);
-      this.beta = { messages: { create } };
     }
   },
 }));
@@ -23,13 +46,21 @@ jest.unstable_mockModule('../src/config.js', () => ({
 const { generateRoast, RoastRefusedError } = await import('../src/roast.js');
 
 /** Builds a minimal Messages API response. */
-function response({ content = [{ type: 'text', text: 'A roast.' }], stop_reason = 'end_turn', stop_details = null } = {}) {
+function response({
+  content = [{ type: 'text', text: 'A roast.' }] as ContentBlock[],
+  stop_reason = 'end_turn',
+  stop_details = null as RoastResponse['stop_details'],
+} = {}): RoastResponse {
   return { content, stop_reason, stop_details };
 }
 
 /** The request body passed to the most recent API call. */
-function lastRequest() {
-  return create.mock.calls.at(-1)[0];
+function lastRequest(): RoastRequest {
+  const call = create.mock.calls.at(-1);
+  if (!call) {
+    throw new Error('expected the Messages API to have been called');
+  }
+  return call[0];
 }
 
 beforeEach(() => {
@@ -52,7 +83,7 @@ describe('generateRoast request', () => {
     expect(request.max_tokens).toBeGreaterThan(0);
     expect(request.output_config).toEqual({ effort: 'low' });
     expect(request.messages).toHaveLength(1);
-    expect(request.messages[0].role).toBe('user');
+    expect(request.messages[0]?.role).toBe('user');
   });
 
   it('enables server-side refusal fallbacks', async () => {
@@ -70,7 +101,7 @@ describe('generateRoast request', () => {
 
     await generateRoast('Bartholomew');
 
-    expect(lastRequest().messages[0].content).toContain(
+    expect(lastRequest().messages[0]?.content).toContain(
       '<display_name>Bartholomew</display_name>',
     );
   });
@@ -80,14 +111,14 @@ describe('generateRoast request', () => {
 
     await generateRoast('z'.repeat(500));
 
-    const content = lastRequest().messages[0].content;
+    const content = lastRequest().messages[0]?.content ?? '';
     expect(content).toContain(`<display_name>${'z'.repeat(100)}</display_name>`);
     expect(content).not.toContain('z'.repeat(101));
   });
 });
 
 describe('system prompt guardrails', () => {
-  let system;
+  let system: string;
 
   beforeEach(async () => {
     create.mockResolvedValue(response());
@@ -121,7 +152,9 @@ describe('system prompt guardrails', () => {
 
 describe('generateRoast response handling', () => {
   it('returns the trimmed text of the response', async () => {
-    create.mockResolvedValue(response({ content: [{ type: 'text', text: '  Nice name.  ' }] }));
+    create.mockResolvedValue(
+      response({ content: [{ type: 'text', text: '  Nice name.  ' }] }),
+    );
 
     await expect(generateRoast('Bartholomew')).resolves.toBe('Nice name.');
   });
@@ -159,7 +192,9 @@ describe('generateRoast response handling', () => {
   });
 
   it('throws when the response carries no text', async () => {
-    create.mockResolvedValue(response({ content: [{ type: 'thinking', thinking: 'hmm' }] }));
+    create.mockResolvedValue(
+      response({ content: [{ type: 'thinking', thinking: 'hmm' }] }),
+    );
 
     await expect(generateRoast('Bartholomew')).rejects.toThrow('no text content');
   });

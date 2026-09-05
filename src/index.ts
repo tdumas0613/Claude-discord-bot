@@ -11,4 +11,4 @@ client.once(Events.ClientReady, (readyClient) => {
 
 client.on(Events.InteractionCreate, handleInteraction);
 
-client.login(DISCORD_TOKEN);
+await client.login(DISCORD_TOKEN);

@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "description": "A Discord bot with a single /roast slash command, powered by the Claude API.",
   "type": "module",
-  "main": "src/index.js",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "deploy": "node src/deploy-commands.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "prestart": "npm run build",
+    "start": "node dist/index.js",
+    "predeploy": "npm run build",
+    "deploy": "node dist/deploy-commands.js",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage"
@@ -21,6 +25,8 @@
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
-    "jest": "^30.5.1"
+    "jest": "^30.5.1",
+    "ts-jest": "^29.4.12",
+    "typescript": "^6.0.3"
   }
 }

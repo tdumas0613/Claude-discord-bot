@@ -23,6 +23,7 @@ build/
 coverage/
 .cache/
 *.tsbuildinfo
+tsconfig.tsbuildinfo
 
 # Editors and OS
 .vscode/

@@ -1,10 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import Anthropic from '@anthropic-ai/sdk';
+import type { GuildMember, Interaction, User } from 'discord.js';
 
-const generateRoast = jest.fn();
+const generateRoast = jest.fn<(displayName: string) => Promise<string>>();
 
 class RoastRefusedError extends Error {
-  constructor(message) {
+  constructor(message: string) {
     super(message);
     this.name = 'RoastRefusedError';
   }
@@ -12,27 +13,63 @@ class RoastRefusedError extends Error {
 
 jest.unstable_mockModule('../src/roast.js', () => ({ generateRoast, RoastRefusedError }));
 
-const { handleInteraction, errorMessage } = await import('../src/interaction.js');
+const { handleInteraction, errorMessage, resolveDisplayName } = await import(
+  '../src/interaction.js'
+);
 
 const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+/** A stand-in for the pieces of `User` this code path touches. */
+type FakeUser = Pick<User, 'id' | 'username'> & {
+  displayName?: string;
+  toString(): string;
+};
+
+interface FakeInteraction {
+  commandName: string;
+  isChatInputCommand: () => boolean;
+  options: {
+    getUser: jest.Mock<() => FakeUser>;
+    getMember: jest.Mock<() => unknown>;
+  };
+  deferReply: jest.Mock<() => Promise<void>>;
+  editReply: jest.Mock<(payload: unknown) => Promise<void>>;
+}
+
+const defaultUser: FakeUser = {
+  id: '42',
+  displayName: 'GlobalName',
+  username: 'username',
+  toString: () => '<@42>',
+};
 
 /** Builds a fake `/roast` interaction with recording reply methods. */
 function makeInteraction({
   commandName = 'roast',
   isChatInputCommand = true,
-  user = { id: '42', displayName: 'GlobalName', username: 'username', toString: () => '<@42>' },
-  member = { displayName: 'ServerNick' },
-} = {}) {
+  user = defaultUser,
+  member = { displayName: 'ServerNick' } as unknown,
+}: Partial<{
+  commandName: string;
+  isChatInputCommand: boolean;
+  user: FakeUser;
+  member: unknown;
+}> = {}): FakeInteraction {
   return {
     commandName,
     isChatInputCommand: () => isChatInputCommand,
     options: {
-      getUser: jest.fn(() => user),
-      getMember: jest.fn(() => member),
+      getUser: jest.fn<() => FakeUser>(() => user),
+      getMember: jest.fn<() => unknown>(() => member),
     },
-    deferReply: jest.fn(async () => {}),
-    editReply: jest.fn(async () => {}),
+    deferReply: jest.fn<() => Promise<void>>(async () => {}),
+    editReply: jest.fn<(payload: unknown) => Promise<void>>(async () => {}),
   };
+}
+
+/** The handler takes a real `Interaction`; the fake stands in for one. */
+function dispatch(interaction: FakeInteraction): Promise<void> {
+  return handleInteraction(interaction as unknown as Interaction);
 }
 
 beforeEach(() => {
@@ -49,7 +86,7 @@ describe('interaction routing', () => {
   it('ignores interactions that are not chat input commands', async () => {
     const interaction = makeInteraction({ isChatInputCommand: false });
 
-    await handleInteraction(interaction);
+    await dispatch(interaction);
 
     expect(interaction.deferReply).not.toHaveBeenCalled();
     expect(generateRoast).not.toHaveBeenCalled();
@@ -58,7 +95,7 @@ describe('interaction routing', () => {
   it('ignores other slash commands', async () => {
     const interaction = makeInteraction({ commandName: 'ping' });
 
-    await handleInteraction(interaction);
+    await dispatch(interaction);
 
     expect(interaction.deferReply).not.toHaveBeenCalled();
     expect(generateRoast).not.toHaveBeenCalled();
@@ -72,7 +109,7 @@ describe('interaction routing', () => {
       return 'A roast.';
     });
 
-    await handleInteraction(interaction);
+    await dispatch(interaction);
 
     expect(deferredFirst).toBe(true);
   });
@@ -80,19 +117,19 @@ describe('interaction routing', () => {
 
 describe('display name selection', () => {
   it('prefers the per-server nickname', async () => {
-    await handleInteraction(makeInteraction());
+    await dispatch(makeInteraction());
 
     expect(generateRoast).toHaveBeenCalledWith('ServerNick');
   });
 
   it('falls back to the global display name when the member is unavailable', async () => {
-    await handleInteraction(makeInteraction({ member: null }));
+    await dispatch(makeInteraction({ member: null }));
 
     expect(generateRoast).toHaveBeenCalledWith('GlobalName');
   });
 
   it('falls back to the username when there is no display name', async () => {
-    await handleInteraction(
+    await dispatch(
       makeInteraction({
         member: null,
         user: { id: '42', username: 'username', toString: () => '<@42>' },
@@ -103,10 +140,32 @@ describe('display name selection', () => {
   });
 
   it('passes no other information about the user to the model', async () => {
-    await handleInteraction(makeInteraction());
+    await dispatch(makeInteraction());
 
     expect(generateRoast).toHaveBeenCalledTimes(1);
     expect(generateRoast.mock.calls[0]).toHaveLength(1);
+  });
+});
+
+describe('resolveDisplayName', () => {
+  const user = defaultUser as unknown as User;
+
+  it('uses the nickname of a resolved guild member', () => {
+    const member = { displayName: 'ServerNick' } as unknown as GuildMember;
+
+    expect(resolveDisplayName(user, member)).toBe('ServerNick');
+  });
+
+  it('reads `nick` from a member resolved off the raw API payload', () => {
+    expect(resolveDisplayName(user, { nick: 'RawNick' } as never)).toBe('RawNick');
+  });
+
+  it('falls through when the raw API member has a null nickname', () => {
+    expect(resolveDisplayName(user, { nick: null } as never)).toBe('GlobalName');
+  });
+
+  it('falls back to the global display name without a member', () => {
+    expect(resolveDisplayName(user, null)).toBe('GlobalName');
   });
 });
 
@@ -114,7 +173,7 @@ describe('successful roast', () => {
   it('replies with the roast, mentioning only the target', async () => {
     const interaction = makeInteraction();
 
-    await handleInteraction(interaction);
+    await dispatch(interaction);
 
     expect(interaction.editReply).toHaveBeenCalledWith({
       content: '<@42> Great name, terrible decision.',
@@ -128,7 +187,7 @@ describe('failure handling', () => {
     const interaction = makeInteraction();
     generateRoast.mockRejectedValue(new RoastRefusedError('Declined.'));
 
-    await handleInteraction(interaction);
+    await dispatch(interaction);
 
     expect(interaction.editReply).toHaveBeenCalledWith(
       expect.stringMatching(/consider yourself spared/i),
@@ -140,7 +199,7 @@ describe('failure handling', () => {
     const interaction = makeInteraction();
     generateRoast.mockRejectedValue(new Error('boom'));
 
-    await handleInteraction(interaction);
+    await dispatch(interaction);
 
     expect(interaction.editReply).toHaveBeenCalledWith(expect.any(String));
     expect(consoleError).toHaveBeenCalled();
@@ -150,7 +209,7 @@ describe('failure handling', () => {
     const interaction = makeInteraction();
     generateRoast.mockRejectedValue(new Error('boom'));
 
-    await handleInteraction(interaction);
+    await dispatch(interaction);
 
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
   });

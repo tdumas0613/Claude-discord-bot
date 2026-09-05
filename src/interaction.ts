@@ -1,22 +1,41 @@
 import Anthropic from '@anthropic-ai/sdk';
+import type {
+  APIInteractionDataResolvedGuildMember,
+  GuildMember,
+  Interaction,
+  User,
+} from 'discord.js';
 import { generateRoast, RoastRefusedError } from './roast.js';
+
+/** What `ChatInputCommandInteraction#options.getMember` can hand back. */
+type ResolvedMember = GuildMember | APIInteractionDataResolvedGuildMember | null;
+
+/**
+ * Picks the name to roast: the per-server nickname when there is one, then the
+ * global display name, then the username. Nothing else about the user is ever
+ * used — the model gets no real information about anyone.
+ *
+ * A member resolved from the raw API payload carries `nick` rather than the
+ * `displayName` getter, so both shapes are handled here.
+ */
+export function resolveDisplayName(user: User, member: ResolvedMember): string {
+  const nickname =
+    member === null ? null : 'displayName' in member ? member.displayName : member.nick;
+
+  return nickname ?? user.displayName ?? user.username;
+}
 
 /**
  * Handles a single interaction from Discord. Ignores anything that is not the
  * `/roast` chat input command.
- *
- * @param {import('discord.js').Interaction} interaction
  */
-export async function handleInteraction(interaction) {
+export async function handleInteraction(interaction: Interaction): Promise<void> {
   if (!interaction.isChatInputCommand() || interaction.commandName !== 'roast') {
     return;
   }
 
   const target = interaction.options.getUser('user', true);
-  const member = interaction.options.getMember('user');
-  // Prefer the per-server nickname when there is one, and never use anything
-  // beyond the display name — the model gets no real information about anyone.
-  const displayName = member?.displayName ?? target.displayName ?? target.username;
+  const displayName = resolveDisplayName(target, interaction.options.getMember('user'));
 
   // The API call takes a few seconds; Discord expects a reply within 3.
   await interaction.deferReply();
@@ -36,7 +55,7 @@ export async function handleInteraction(interaction) {
 }
 
 /** Maps a failure to something friendly enough to post in a public channel. */
-export function errorMessage(error) {
+export function errorMessage(error: unknown): string {
   if (error instanceof RoastRefusedError) {
     return "I couldn't come up with anything that stays on the right side of the line. Consider yourself spared.";
   }
