@@ -1,0 +1,20 @@
+{
+  "name": "claude-discord-roast-bot",
+  "version": "1.0.0",
+  "description": "A Discord bot with a single /roast slash command, powered by the Claude API.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/deploy-commands.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2"
+  }
+}
