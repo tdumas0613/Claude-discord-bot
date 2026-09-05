@@ -71,12 +71,12 @@ The bot defers the reply while Claude writes, then posts the roast mentioning th
 
 | File                    | Role                                                          |
 | ----------------------- | ------------------------------------------------------------- |
-| `src/index.js`          | Creates the client, wires up events, logs in                   |
-| `src/interaction.js`    | Handles the `/roast` interaction and formats replies           |
-| `src/roast.js`          | System prompt and the Claude API call                          |
-| `src/commands.js`       | Slash command definition, shared with the deploy script        |
-| `src/deploy-commands.js`| Registers the command with Discord                             |
-| `src/config.js`         | Loads and validates environment variables                      |
+| `src/index.ts`          | Creates the client, wires up events, logs in                   |
+| `src/interaction.ts`    | Handles the `/roast` interaction and formats replies           |
+| `src/roast.ts`          | System prompt and the Claude API call                          |
+| `src/commands.ts`       | Slash command definition, shared with the deploy script        |
+| `src/deploy-commands.ts`| Registers the command with Discord                             |
+| `src/config.ts`         | Loads and validates environment variables                      |
 
 The API call uses `claude-opus-5` at low effort (a one-liner needs no deep reasoning) and
 enables server-side refusal fallbacks, so a request the model declines is automatically
@@ -91,20 +91,40 @@ npm run test:watch    # re-run on change
 npm run test:coverage # run with a coverage report
 ```
 
-The suite is [Jest](https://jestjs.io/), running against native ES modules — which is why
-the scripts invoke Jest through `node --experimental-vm-modules` rather than the `jest`
-binary directly. Tests live in `tests/` and cover the command definition, the shape of the
-Claude request (model, effort, fallbacks, prompt guardrails, display-name handling), the
-interaction handler's reply and failure paths, and config validation. No test makes a
-network call: the Anthropic SDK and Discord interaction are stubbed.
+The suite is [Jest](https://jestjs.io/) with [ts-jest](https://kulshekhar.github.io/ts-jest/),
+running against native ES modules — which is why the scripts invoke Jest through
+`node --experimental-vm-modules` rather than the `jest` binary directly. Tests live in
+`tests/` and cover the command definition, the shape of the Claude request (model, effort,
+fallbacks, prompt guardrails, display-name handling), the interaction handler's reply and
+failure paths, and config validation. No test makes a network call: the Anthropic SDK and
+Discord interaction are stubbed.
 
-`src/index.js` and `src/deploy-commands.js` are excluded from coverage — they are thin
+`src/index.ts` and `src/deploy-commands.ts` are excluded from coverage — they are thin
 wiring that logs in or calls Discord's REST API on import.
+
+## TypeScript
+
+The project is written in TypeScript under `strict` mode and compiled with `tsc`:
+
+```bash
+npm run typecheck   # tsc over src/ and tests/, no output
+npm run build       # compile src/ to dist/
+```
+
+`npm start` and `npm run deploy` build first (via `prestart` / `predeploy`) and then run the
+compiled output from `dist/`, so a fresh clone works without a separate build step.
+
+Two config files: `tsconfig.json` type-checks everything including tests, and
+`tsconfig.build.json` extends it to emit `src/` into `dist/`. Module resolution is
+`NodeNext`, so relative imports carry the `.js` suffix in the TypeScript source — that is
+correct for native ESM, and Jest maps it back to the `.ts` file on disk.
+
+TypeScript is pinned to 6.x because ts-jest currently declares `typescript >=4.3 <7`.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs `npm ci && npm test` on every push and pull request,
-against Node 20 and Node 22.
+`.github/workflows/ci.yml` type-checks, builds, and runs the tests on every push and pull
+request, against Node 20 and Node 22.
 
 ## Safety notes
 

@@ -1,4 +1,5 @@
 import { SlashCommandBuilder } from 'discord.js';
+import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
 
 export const roastCommand = new SlashCommandBuilder()
   .setName('roast')
@@ -10,4 +11,6 @@ export const roastCommand = new SlashCommandBuilder()
       .setRequired(true),
   );
 
-export const commands = [roastCommand.toJSON()];
+export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
+  roastCommand.toJSON(),
+];

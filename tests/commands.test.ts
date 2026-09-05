@@ -1,9 +1,14 @@
 import { describe, expect, it } from '@jest/globals';
 import { ApplicationCommandOptionType, ApplicationCommandType } from 'discord.js';
+import type { APIApplicationCommandUserOption } from 'discord.js';
 import { commands, roastCommand } from '../src/commands.js';
 
 describe('/roast command definition', () => {
   const [roast] = commands;
+
+  if (!roast) {
+    throw new Error('expected a command to be defined');
+  }
 
   it('exposes exactly one command', () => {
     expect(commands).toHaveLength(1);
@@ -23,13 +28,17 @@ describe('/roast command definition', () => {
   });
 
   it('takes a single required user option named "user"', () => {
-    expect(roast.options).toHaveLength(1);
+    const options = roast.options ?? [];
+    expect(options).toHaveLength(1);
 
-    const [option] = roast.options;
-    expect(option.name).toBe('user');
-    expect(option.type).toBe(ApplicationCommandOptionType.User);
-    expect(option.required).toBe(true);
-    expect(option.description.length).toBeGreaterThan(0);
+    const [option] = options;
+    expect(option?.type).toBe(ApplicationCommandOptionType.User);
+
+    // Narrow to the user-option shape so `required` is actually type-checked.
+    const userOption = option as APIApplicationCommandUserOption;
+    expect(userOption.name).toBe('user');
+    expect(userOption.required).toBe(true);
+    expect(userOption.description.length).toBeGreaterThan(0);
   });
 
   it('serializes to the same payload the builder produces', () => {

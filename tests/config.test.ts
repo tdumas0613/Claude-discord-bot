@@ -8,12 +8,14 @@ const ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'DISCORD_CLIENT_ID',
   'DISCORD_GUILD_ID',
-];
+] as const;
 
-const originalEnv = {};
+type EnvKey = (typeof ENV_KEYS)[number];
 
-/** Imports a fresh copy of config.js against the current environment. */
-async function importConfig() {
+const originalEnv: Partial<Record<EnvKey, string | undefined>> = {};
+
+/** Imports a fresh copy of config.ts against the current environment. */
+async function importConfig(): Promise<typeof import('../src/config.js')> {
   jest.resetModules();
   return import('../src/config.js');
 }
@@ -32,10 +34,11 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const key of ENV_KEYS) {
-    if (originalEnv[key] === undefined) {
+    const original = originalEnv[key];
+    if (original === undefined) {
       delete process.env[key];
     } else {
-      process.env[key] = originalEnv[key];
+      process.env[key] = original;
     }
   }
   jest.restoreAllMocks();
@@ -74,7 +77,7 @@ describe('config', () => {
     expect(config.DISCORD_GUILD_ID).toBe('guild-id');
   });
 
-  it.each(['DISCORD_TOKEN', 'ANTHROPIC_API_KEY'])(
+  it.each(['DISCORD_TOKEN', 'ANTHROPIC_API_KEY'] as const)(
     'exits when %s is missing',
     async (missing) => {
       process.env.DISCORD_TOKEN = 'discord-token';

@@ -38,7 +38,7 @@ Reply with the roast text and nothing else.`;
 
 /** Thrown when the model declines to produce a roast. */
 export class RoastRefusedError extends Error {
-  constructor(message) {
+  constructor(message: string) {
     super(message);
     this.name = 'RoastRefusedError';
   }
@@ -47,11 +47,12 @@ export class RoastRefusedError extends Error {
 /**
  * Generates a roast for a display name.
  *
- * @param {string} displayName The target's Discord display name.
- * @returns {Promise<string>} The roast text.
- * @throws {Error} If the model declines or returns nothing usable.
+ * @param displayName The target's Discord display name.
+ * @returns The roast text.
+ * @throws {RoastRefusedError} If the model declines to write one.
+ * @throws {Error} If the response carries no usable text.
  */
-export async function generateRoast(displayName) {
+export async function generateRoast(displayName: string): Promise<string> {
   // Display names are user-controlled, so keep them clearly delimited and bounded.
   const name = displayName.slice(0, 100);
 
