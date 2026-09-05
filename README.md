@@ -9,7 +9,7 @@ disability, gender, sexual orientation, appearance, and other protected traits.
 
 ## Requirements
 
-- Node.js 18 or newer
+- Node.js 20 or newer
 - A Discord application with a bot user
 - An Anthropic API key
 
@@ -71,7 +71,8 @@ The bot defers the reply while Claude writes, then posts the roast mentioning th
 
 | File                    | Role                                                          |
 | ----------------------- | ------------------------------------------------------------- |
-| `src/index.js`          | Logs in, handles the `/roast` interaction, formats replies     |
+| `src/index.js`          | Creates the client, wires up events, logs in                   |
+| `src/interaction.js`    | Handles the `/roast` interaction and formats replies           |
 | `src/roast.js`          | System prompt and the Claude API call                          |
 | `src/commands.js`       | Slash command definition, shared with the deploy script        |
 | `src/deploy-commands.js`| Registers the command with Discord                             |
@@ -81,6 +82,29 @@ The API call uses `claude-opus-5` at low effort (a one-liner needs no deep reaso
 enables server-side refusal fallbacks, so a request the model declines is automatically
 retried on a fallback model inside the same call. If the whole chain still declines, the
 bot posts a harmless "consider yourself spared" message rather than an error.
+
+## Tests
+
+```bash
+npm test              # run the suite once
+npm run test:watch    # re-run on change
+npm run test:coverage # run with a coverage report
+```
+
+The suite is [Jest](https://jestjs.io/), running against native ES modules — which is why
+the scripts invoke Jest through `node --experimental-vm-modules` rather than the `jest`
+binary directly. Tests live in `tests/` and cover the command definition, the shape of the
+Claude request (model, effort, fallbacks, prompt guardrails, display-name handling), the
+interaction handler's reply and failure paths, and config validation. No test makes a
+network call: the Anthropic SDK and Discord interaction are stubbed.
+
+`src/index.js` and `src/deploy-commands.js` are excluded from coverage — they are thin
+wiring that logs in or calls Discord's REST API on import.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs `npm ci && npm test` on every push and pull request,
+against Node 20 and Node 22.
 
 ## Safety notes
 
