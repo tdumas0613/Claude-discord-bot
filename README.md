@@ -61,7 +61,7 @@ limits; use them.
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 24 (the current LTS) or newer — the version is recorded in `.nvmrc`
 - A Discord application with a bot user
 - An Anthropic API key
 
@@ -200,7 +200,7 @@ wiring that logs in or calls Discord's REST API on import.
 ## Continuous integration
 
 `.github/workflows/ci.yml` type-checks, builds, and runs the tests on every push and pull
-request, against Node 22.
+request, against Node 24.
 
 ## License
 

@@ -92,4 +92,9 @@ object fixtures work in tests.
 ## CI
 
 `.github/workflows/ci.yml` runs typecheck → build → tests on every push and pull request,
-on Node 22 only. Keep the README's CI section in sync with the matrix if it changes.
+on Node 24 only (the current LTS, also pinned in `.nvmrc` and `engines`). Keep the README's
+CI section, `.nvmrc`, and `engines` in sync with the matrix if it changes.
+
+`@types/node` is pinned as a direct devDependency to match the runtime major. Without the
+pin it resolves transitively to whatever a dependency happens to pull in, which can describe
+a different Node than the one the project runs on.
