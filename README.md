@@ -1,11 +1,63 @@
 # Claude Discord Roast Bot
 
-A small Discord bot with a single slash command, `/roast`, that asks the Claude API to
-write a short, playful, PG-13 roast of another server member.
+Someone types `/roast @friend`, and a few seconds later the bot posts a one-liner at their
+expense. That's the whole product.
 
-The model is given **only the target's Discord display name** — no message history, no
-profile data, nothing else — and the system prompt keeps roasts away from race, religion,
-disability, gender, sexual orientation, appearance, and other protected traits.
+The interesting constraint is what the model is allowed to know. It gets **one thing**: the
+target's display name. No message history, no profile, no server context. So it can't dig
+up anything real about anyone — it can only riff on the name itself and on obviously
+invented nonsense. That's a deliberate design choice, not a limitation to fix later.
+
+---
+
+## Using it
+
+```
+/roast user:@someone
+```
+
+The bot thinks for a moment (Discord shows it as "thinking…"), then replies in-channel,
+mentioning the person being roasted.
+
+Occasionally Claude will decline to write one — usually when a display name is engineered
+to bait it into something ugly. When that happens the bot posts a light "consider yourself
+spared" message instead of an error, and the joke lands anyway.
+
+## Before you turn it loose
+
+This bot is designed to be funny at someone's expense, which means it's worth a minute of
+thought before you drop it into a busy server.
+
+The system prompt does real work here. It bans jokes about race, religion, disability,
+gender, sexual orientation, appearance, and the other usual protected traits; it bans
+slurs, sexual content, violence and real-world tragedy; and it forbids the model from
+inventing biographical claims about a real person. Display names crafted to bait the model
+get roasted for *being* that kind of name, rather than taken as an invitation.
+
+That's strong, but a prompt is not a guarantee. Two things worth doing on a public server:
+
+- Restrict who can run `/roast` using Discord's per-command permissions.
+- Give people an obvious way to tell you when something lands badly — and be willing to
+  pull the command if it does.
+
+If you'd rather nobody could be roasted without opting in, that's a change to
+`src/interaction.ts`, and a reasonable one.
+
+## What it costs
+
+Every `/roast` is a live Claude API call billed to your own Anthropic key — this is not
+free to run.
+
+At current [Claude Opus 5 pricing](https://platform.claude.com/docs/en/pricing) ($5 per
+million input tokens, $25 per million output), a single roast works out to roughly **half a
+cent to two cents**. The prompt is small and fixed at about 480 input tokens; almost all the variation
+is in how much the model thinks before answering. Treat that as an order-of-magnitude
+estimate rather than a quote — it's derived from the prompt size and published rates, not
+measured against a real bill.
+
+For a small server that's pocket change. For a server where a few hundred people discover
+the command on the same afternoon, it's worth watching. Anthropic's console has spend
+limits; use them.
 
 ## Requirements
 
@@ -51,7 +103,7 @@ disability, gender, sexual orientation, appearance, and other protected traits.
 
    With `DISCORD_GUILD_ID` set, the command registers to that server and is available
    immediately. Without it, the command registers globally and can take up to an hour to
-   appear.
+   appear. Re-run this whenever the command definition changes.
 
 6. **Start the bot**
 
@@ -59,52 +111,52 @@ disability, gender, sexual orientation, appearance, and other protected traits.
    npm start
    ```
 
-## Usage
+---
 
-```
-/roast user:@someone
-```
+# Under the hood
 
-The bot defers the reply while Claude writes, then posts the roast mentioning the target.
+Everything below is for people reading or changing the code.
 
-## How it works
+## How a roast happens
 
-| File                    | Role                                                          |
-| ----------------------- | ------------------------------------------------------------- |
-| `src/index.ts`          | Creates the client, wires up events, logs in                   |
-| `src/interaction.ts`    | Handles the `/roast` interaction and formats replies           |
-| `src/roast.ts`          | System prompt and the Claude API call                          |
-| `src/commands.ts`       | Slash command definition, shared with the deploy script        |
-| `src/deploy-commands.ts`| Registers the command with Discord                             |
-| `src/config.ts`         | Loads and validates environment variables                      |
+`index.ts` logs in and forwards every interaction to `interaction.ts`, which decides
+whether it's a `/roast`, works out which name to use, and defers the reply — Discord wants
+an acknowledgement within three seconds, and the API call takes longer. It then calls
+`roast.ts`, which owns the system prompt and the Claude request, and posts whatever comes
+back.
 
-The API call uses `claude-opus-5` at low effort (a one-liner needs no deep reasoning) and
-enables server-side refusal fallbacks, so a request the model declines is automatically
-retried on a fallback model inside the same call. If the whole chain still declines, the
-bot posts a harmless "consider yourself spared" message rather than an error.
+| File                     | Role                                                    |
+| ------------------------ | ------------------------------------------------------- |
+| `src/index.ts`           | Creates the client, wires up events, logs in            |
+| `src/interaction.ts`     | Handles the `/roast` interaction and formats replies    |
+| `src/roast.ts`           | System prompt and the Claude API call                   |
+| `src/commands.ts`        | Slash command definition, shared with the deploy script |
+| `src/deploy-commands.ts` | Registers the command with Discord                      |
+| `src/config.ts`          | Loads and validates environment variables               |
 
-## Tests
+The split between `index.ts` and `interaction.ts` exists so the handler can be imported by
+a test without logging into Discord. Worth preserving.
 
-```bash
-npm test              # run the suite once
-npm run test:watch    # re-run on change
-npm run test:coverage # run with a coverage report
-```
+Picking the name to roast is fiddlier than it looks: Discord may hand back either a full
+`GuildMember` with a `displayName` getter, or a raw resolved member carrying `nick`.
+`resolveDisplayName` handles both, then falls back to the global display name and finally
+the username.
 
-The suite is [Jest](https://jestjs.io/) with [ts-jest](https://kulshekhar.github.io/ts-jest/),
-running against native ES modules — which is why the scripts invoke Jest through
-`node --experimental-vm-modules` rather than the `jest` binary directly. Tests live in
-`tests/` and cover the command definition, the shape of the Claude request (model, effort,
-fallbacks, prompt guardrails, display-name handling), the interaction handler's reply and
-failure paths, and config validation. No test makes a network call: the Anthropic SDK and
-Discord interaction are stubbed.
+## The Claude API call
 
-`src/index.ts` and `src/deploy-commands.ts` are excluded from coverage — they are thin
-wiring that logs in or calls Discord's REST API on import.
+The request uses `claude-opus-5` at low effort — a one-liner needs no deep reasoning, and
+low effort keeps it terse. Server-side refusal fallbacks are enabled, so a request the
+model declines is automatically retried on a fallback model inside the same call. If the
+whole chain still declines, the response comes back with `stop_reason: "refusal"` and no
+text, which becomes the "consider yourself spared" reply rather than an error.
+
+The display name is wrapped in `<display_name>` tags and truncated to 100 characters before
+it reaches the prompt. Display names are user-controlled input, so they stay delimited and
+bounded.
 
 ## TypeScript
 
-The project is written in TypeScript under `strict` mode and compiled with `tsc`:
+Written in TypeScript under `strict` mode and compiled with `tsc`:
 
 ```bash
 npm run typecheck   # tsc over src/ and tests/, no output
@@ -121,20 +173,34 @@ correct for native ESM, and Jest maps it back to the `.ts` file on disk.
 
 TypeScript is pinned to 6.x because ts-jest currently declares `typescript >=4.3 <7`.
 
+## Tests
+
+```bash
+npm test                             # run the suite once
+npm test -- tests/roast.test.ts      # a single file
+npm test -- -t "enables server-side" # a single test by name
+npm run test:watch                   # re-run on change
+npm run test:coverage                # run with a coverage report
+```
+
+The suite is [Jest](https://jestjs.io/) with [ts-jest](https://kulshekhar.github.io/ts-jest/),
+running against native ES modules — which is why the scripts invoke Jest through
+`node --experimental-vm-modules` rather than the `jest` binary directly. Tests live in
+`tests/` and cover the command definition, the shape of the Claude request (model, effort,
+fallbacks, prompt guardrails, display-name handling), the interaction handler's reply and
+failure paths, and config validation. No test makes a network call: the Anthropic SDK and
+Discord interaction are stubbed.
+
+Note that the prompt's guardrails are asserted by tests — loosening the system prompt will
+fail the suite, which is intentional.
+
+`src/index.ts` and `src/deploy-commands.ts` are excluded from coverage; they are thin
+wiring that logs in or calls Discord's REST API on import.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` type-checks, builds, and runs the tests on every push and pull
 request, against Node 22.
-
-## Safety notes
-
-- Roasts are generated from the display name alone; the prompt forbids inventing
-  biographical claims about real people.
-- The prompt bans jokes about protected traits, slurs, sexual content, violence, and
-  real-world tragedy, and instructs the model to ignore display names crafted to bait it.
-- Guardrails in a prompt are strong but not absolute. For a public server, consider
-  restricting who can run `/roast` with Discord's per-command permissions, and give people
-  an easy way to report output they are unhappy with.
 
 ## License
 
