@@ -31,3 +31,6 @@ tsconfig.tsbuildinfo
 *.swp
 .DS_Store
 Thumbs.db
+
+#image files
+roast_bot_app_icon.png
