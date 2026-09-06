@@ -1,5 +1,4 @@
 import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import Anthropic from '@anthropic-ai/sdk';
 import type { GuildMember, Interaction, User } from 'discord.js';
 
 const generateRoast = jest.fn<(displayName: string) => Promise<string>>();
@@ -11,7 +10,30 @@ class RoastRefusedError extends Error {
   }
 }
 
-jest.unstable_mockModule('../src/roast.js', () => ({ generateRoast, RoastRefusedError }));
+type Reason =
+  | 'rate_limited'
+  | 'authentication'
+  | 'api_error'
+  | 'empty_response'
+  | 'unknown';
+
+class RoastUnavailableError extends Error {
+  readonly reason: Reason;
+  readonly status: number | undefined;
+
+  constructor(reason: Reason, message: string, status?: number) {
+    super(message);
+    this.name = 'RoastUnavailableError';
+    this.reason = reason;
+    this.status = status;
+  }
+}
+
+jest.unstable_mockModule('../src/roast.js', () => ({
+  generateRoast,
+  RoastRefusedError,
+  RoastUnavailableError,
+}));
 
 const { handleInteraction, errorMessage, resolveDisplayName } = await import(
   '../src/interaction.js'
@@ -221,21 +243,27 @@ describe('errorMessage', () => {
   });
 
   it('describes a rate limit', () => {
-    const error = new Anthropic.RateLimitError(429, undefined, 'slow down', new Headers());
+    const error = new RoastUnavailableError('rate_limited', 'slow down', 429);
 
     expect(errorMessage(error)).toMatch(/too many roasts/i);
   });
 
   it('describes an authentication failure', () => {
-    const error = new Anthropic.AuthenticationError(401, undefined, 'bad key', new Headers());
+    const error = new RoastUnavailableError('authentication', 'bad key', 401);
 
     expect(errorMessage(error)).toMatch(/api key/i);
   });
 
   it('includes the status for other API errors', () => {
-    const error = new Anthropic.InternalServerError(503, undefined, 'oops', new Headers());
+    const error = new RoastUnavailableError('api_error', 'oops', 503);
 
     expect(errorMessage(error)).toContain('503');
+  });
+
+  it('falls back to the generic message for an empty response', () => {
+    const error = new RoastUnavailableError('empty_response', 'no text');
+
+    expect(errorMessage(error)).toMatch(/something went wrong/i);
   });
 
   it('has a generic fallback for unknown errors', () => {

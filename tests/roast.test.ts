@@ -25,8 +25,27 @@ interface RoastResponse {
 const create = jest.fn<(params: RoastRequest) => Promise<RoastResponse>>();
 const constructorOptions: unknown[] = [];
 
+// `roast.ts` branches on `instanceof Anthropic.RateLimitError` and friends, so
+// the double has to carry the same class hierarchy the real SDK exposes —
+// otherwise `instanceof undefined` throws. `tests/anthropic-contract.test.ts`
+// checks that hierarchy against the real package.
+class MockAPIError extends Error {
+  readonly status: number | undefined;
+
+  constructor(status: number | undefined, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+class MockRateLimitError extends MockAPIError {}
+class MockAuthenticationError extends MockAPIError {}
+
 jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
   default: class MockAnthropic {
+    static APIError = MockAPIError;
+    static RateLimitError = MockRateLimitError;
+    static AuthenticationError = MockAuthenticationError;
+
     beta = { messages: { create } };
 
     constructor(options: unknown) {
@@ -203,5 +222,45 @@ describe('generateRoast response handling', () => {
     create.mockRejectedValue(new Error('network down'));
 
     await expect(generateRoast('Bartholomew')).rejects.toThrow('network down');
+  });
+});
+
+describe('SDK error translation', () => {
+  it.each([
+    ['rate limits', new MockRateLimitError(429, 'slow down'), 'rate_limited', 429],
+    ['auth failures', new MockAuthenticationError(401, 'bad key'), 'authentication', 401],
+    ['other API errors', new MockAPIError(503, 'oops'), 'api_error', 503],
+  ])('translates %s into a RoastUnavailableError', async (_label, thrown, reason, status) => {
+    create.mockRejectedValue(thrown);
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason,
+      status,
+    });
+  });
+
+  it('translates an unrecognized failure into reason "unknown"', async () => {
+    create.mockRejectedValue(new Error('network down'));
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason: 'unknown',
+    });
+  });
+
+  it('reports an empty response as reason "empty_response"', async () => {
+    create.mockResolvedValue(response({ content: [] }));
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason: 'empty_response',
+    });
+  });
+
+  it('keeps refusals distinct from unavailability', async () => {
+    create.mockResolvedValue(response({ content: [], stop_reason: 'refusal' }));
+
+    await expect(generateRoast('Bartholomew')).rejects.toBeInstanceOf(RoastRefusedError);
   });
 });
