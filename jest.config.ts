@@ -17,7 +17,8 @@ const config: Config = {
   },
   testMatch: ['**/tests/**/*.test.ts'],
   clearMocks: true,
-  collectCoverageFrom: ['src/**/*.ts', '!src/index.ts', '!src/register-slash-commands.ts'],
+  // src/bot/* are entrypoints that log in or call Discord on import.
+  collectCoverageFrom: ['src/**/*.ts', '!src/bot/**'],
 };
 
 export default config;

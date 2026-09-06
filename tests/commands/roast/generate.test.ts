@@ -25,8 +25,27 @@ interface RoastResponse {
 const create = jest.fn<(params: RoastRequest) => Promise<RoastResponse>>();
 const constructorOptions: unknown[] = [];
 
+// `roast.ts` branches on `instanceof Anthropic.RateLimitError` and friends, so
+// the double has to carry the same class hierarchy the real SDK exposes —
+// otherwise `instanceof undefined` throws. `tests/anthropic-contract.test.ts`
+// checks that hierarchy against the real package.
+class MockAPIError extends Error {
+  readonly status: number | undefined;
+
+  constructor(status: number | undefined, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+class MockRateLimitError extends MockAPIError {}
+class MockAuthenticationError extends MockAPIError {}
+
 jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
   default: class MockAnthropic {
+    static APIError = MockAPIError;
+    static RateLimitError = MockRateLimitError;
+    static AuthenticationError = MockAuthenticationError;
+
     beta = { messages: { create } };
 
     constructor(options: unknown) {
@@ -36,14 +55,14 @@ jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
 }));
 
 // Stub config so the tests never touch a real .env file or exit the process.
-jest.unstable_mockModule('../src/config.js', () => ({
+jest.unstable_mockModule('../../../src/config.js', () => ({
   ANTHROPIC_API_KEY: 'test-anthropic-key',
   DISCORD_TOKEN: 'test-discord-token',
   DISCORD_CLIENT_ID: null,
   DISCORD_GUILD_ID: null,
 }));
 
-const { generateRoast, RoastRefusedError } = await import('../src/roast.js');
+const { generateRoast, RoastRefusedError } = await import('../../../src/commands/roast/generate.js');
 
 /** Builds a minimal Messages API response. */
 function response({
@@ -203,5 +222,56 @@ describe('generateRoast response handling', () => {
     create.mockRejectedValue(new Error('network down'));
 
     await expect(generateRoast('Bartholomew')).rejects.toThrow('network down');
+  });
+});
+
+describe('SDK error translation', () => {
+  it.each([
+    ['rate limits', new MockRateLimitError(429, 'slow down'), 'rate_limited', 429],
+    ['auth failures', new MockAuthenticationError(401, 'bad key'), 'authentication', 401],
+    ['other API errors', new MockAPIError(503, 'oops'), 'api_error', 503],
+  ])('translates %s into a RoastUnavailableError', async (_label, thrown, reason, status) => {
+    create.mockRejectedValue(thrown);
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason,
+      status,
+    });
+  });
+
+  it('translates an unrecognized failure into reason "unknown"', async () => {
+    create.mockRejectedValue(new Error('network down'));
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason: 'unknown',
+      message: 'network down',
+    });
+  });
+
+  it('stringifies a thrown value that is not an Error', async () => {
+    create.mockRejectedValue('socket hang up');
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason: 'unknown',
+      message: 'socket hang up',
+    });
+  });
+
+  it('reports an empty response as reason "empty_response"', async () => {
+    create.mockResolvedValue(response({ content: [] }));
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason: 'empty_response',
+    });
+  });
+
+  it('keeps refusals distinct from unavailability', async () => {
+    create.mockResolvedValue(response({ content: [], stop_reason: 'refusal' }));
+
+    await expect(generateRoast('Bartholomew')).rejects.toBeInstanceOf(RoastRefusedError);
   });
 });

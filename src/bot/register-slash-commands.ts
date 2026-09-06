@@ -1,7 +1,7 @@
 import { DiscordAPIError, REST, Routes } from 'discord.js';
 import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
-import { commands } from './commands.js';
-import { DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DISCORD_TOKEN } from './config.js';
+import { commands } from '../commands/index.js';
+import { DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DISCORD_TOKEN } from '../config.js';
 
 const clientId = DISCORD_CLIENT_ID;
 if (!clientId) {

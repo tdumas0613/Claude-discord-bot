@@ -1,11 +1,10 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type {
   APIInteractionDataResolvedGuildMember,
+  ChatInputCommandInteraction,
   GuildMember,
-  Interaction,
   User,
 } from 'discord.js';
-import { generateRoast, RoastRefusedError } from './roast.js';
+import { generateRoast, RoastRefusedError, RoastUnavailableError } from './generate.js';
 
 /** What `ChatInputCommandInteraction#options.getMember` can hand back. */
 type ResolvedMember = GuildMember | APIInteractionDataResolvedGuildMember | null;
@@ -26,14 +25,10 @@ export function resolveDisplayName(user: User, member: ResolvedMember): string {
 }
 
 /**
- * Handles a single interaction from Discord. Ignores anything that is not the
- * `/roast` chat input command.
+ * Runs `/roast`. The registry has already matched the command name, so this
+ * only deals with the roast itself.
  */
-export async function handleInteraction(interaction: Interaction): Promise<void> {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'roast') {
-    return;
-  }
-
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const target = interaction.options.getUser('user', true);
   const displayName = resolveDisplayName(target, interaction.options.getMember('user'));
 
@@ -54,19 +49,27 @@ export async function handleInteraction(interaction: Interaction): Promise<void>
   }
 }
 
-/** Maps a failure to something friendly enough to post in a public channel. */
+/**
+ * Maps a failure to something friendly enough to post in a public channel.
+ *
+ * Branches on the reason carried by the domain error rather than on SDK
+ * exception types — this layer has no Anthropic dependency.
+ */
 export function errorMessage(error: unknown): string {
   if (error instanceof RoastRefusedError) {
     return "I couldn't come up with anything that stays on the right side of the line. Consider yourself spared.";
   }
-  if (error instanceof Anthropic.RateLimitError) {
-    return 'Too many roasts at once — give me a minute to reload.';
-  }
-  if (error instanceof Anthropic.AuthenticationError) {
-    return 'My Claude API key is not working. Someone tell the bot owner.';
-  }
-  if (error instanceof Anthropic.APIError) {
-    return `The roast factory is down (API error ${error.status}). Try again shortly.`;
+  if (error instanceof RoastUnavailableError) {
+    switch (error.reason) {
+      case 'rate_limited':
+        return 'Too many roasts at once — give me a minute to reload.';
+      case 'authentication':
+        return 'My Claude API key is not working. Someone tell the bot owner.';
+      case 'api_error':
+        return `The roast factory is down (API error ${error.status}). Try again shortly.`;
+      default:
+        break;
+    }
   }
   return 'Something went wrong writing that roast. Try again shortly.';
 }

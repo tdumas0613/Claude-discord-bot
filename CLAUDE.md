@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A Discord bot with one slash command, `/roast`, that asks the Claude API for a short PG-13
-roast of a server member. Small on purpose: six source files, no database, no web server.
+roast of a server member. Small on purpose: no database, no web server.
 
 ## Commands
 
@@ -13,10 +13,10 @@ roast of a server member. Small on purpose: six source files, no database, no we
 npm run typecheck                    # tsc over src/ AND tests/ (tsconfig.json)
 npm run build                        # emit src/ -> dist/ (tsconfig.build.json)
 npm test                             # full Jest suite
-npm test -- tests/roast.test.ts      # one file
+npm test -- tests/commands/roast     # one folder
 npm test -- -t "enables server-side" # one test by name
 npm run test:coverage                # coverage (currently 100% on covered modules)
-npm start                            # builds first via prestart, then runs dist/index.js
+npm start                            # builds first via prestart, runs dist/bot/index.js
 npm run register                     # builds first via preregister, registers /roast
 ```
 
@@ -26,30 +26,40 @@ rather than the `jest` binary — Jest needs that flag for native ESM. The
 
 Slash commands must be registered with Discord before they appear. `npm run register` writes
 to one guild when `DISCORD_GUILD_ID` is set (instant) and globally otherwise (up to an hour
-to propagate). Re-run it whenever `src/commands.ts` changes.
+to propagate). Re-run it whenever a command definition changes.
 
 ## Architecture
 
-Flow: `index.ts` (client + login) → `interaction.ts` (routing, replies) → `roast.ts`
-(prompt + API call). `config.ts` sits underneath everything; `commands.ts` is shared
-between the bot and `register-slash-commands.ts`.
+Organized by feature, not by vendor. `src/bot/` holds the two entrypoints; `src/commands/`
+holds one folder per slash command; `src/config.ts` sits underneath everything.
 
-The split exists for testability. `index.ts` calls `client.login()` at import time, so the
-handler lives in `interaction.ts` where a test can import it without touching the network.
-Keep it that way — moving logic back into `index.ts` makes it untestable, and `index.ts`
-and `register-slash-commands.ts` are excluded from coverage precisely because they act on
-import.
+Flow: `bot/index.ts` (client + login) → `commands/index.ts` (registry + router) →
+`commands/roast/handler.ts` (replies) → `commands/roast/generate.ts` (API call).
+
+Each command folder exports a single `BotCommand` (`commands/types.ts`) from its
+`index.ts`: a `definition` to register and an `execute` to run. `commands/index.ts` holds
+the name→command map, derives the registration payload from it, and routes interactions.
+Adding a command is a new folder plus one entry in that map — do not add command-specific
+branching to the router.
+
+Everything outside `src/bot/` is importable without side effects. The entrypoints act on
+import (login, REST call), which is why they hold no logic and are excluded from coverage.
+
+The Anthropic SDK is imported in exactly ONE file: `commands/roast/generate.ts`. It
+translates SDK exceptions into `RoastUnavailableError` with a `reason`; the Discord layer
+branches on that reason. Do not import `@anthropic-ai/sdk` anywhere else — that boundary is
+the point, and `tests/anthropic-contract.test.ts` guards the class hierarchy it relies on.
 
 `config.ts` calls `process.exit(1)` at import time when a required variable is missing.
 Anything importing it transitively (which is nearly everything) will kill the process
-without `DISCORD_TOKEN` and `ANTHROPIC_API_KEY` set. Tests mock `../src/config.js` rather
+without `DISCORD_TOKEN` and `ANTHROPIC_API_KEY` set. Tests mock `src/config.js` (at whatever relative depth) rather
 than setting env vars, except `tests/config.test.ts`, which mocks `dotenv/config` and spies
 on `process.exit` so a developer's local `.env` cannot influence the result.
 
 ## The Claude API call
 
-In `src/roast.ts`. Read the `claude-api` skill before changing it — model IDs and parameter
-shapes here are current and easy to "correct" into something stale.
+In `src/commands/roast/generate.ts`. Read the `claude-api` skill before changing it —
+model IDs and parameter shapes here are current and easy to "correct" into something stale.
 
 - Model is `claude-opus-5`. Do not swap it for a cheaper model without being asked.
 - `output_config: { effort: 'low' }` — a one-liner needs no deep reasoning. `budget_tokens`
@@ -66,11 +76,12 @@ The model receives **only the target's display name**, wrapped in `<display_name
 truncated to 100 characters. Display names are attacker-controlled; keep them delimited and
 bounded. The system prompt's hard limits (protected traits, slurs, sexual content,
 real-world tragedy, no inventing biographical facts) are asserted by tests in
-`tests/roast.test.ts` — loosening the prompt breaks them, which is intentional.
+`tests/commands/roast/generate.test.ts` — loosening the prompt breaks them, which is
+intentional. The prompt text itself lives in `commands/roast/prompt.ts`.
 
 ## TypeScript and ESM gotchas
 
-- **Relative imports carry a `.js` suffix in `.ts` source** (`from './roast.js'`). That is
+- **Relative imports carry a `.js` suffix in `.ts` source** (`from './generate.js'`). That is
   correct for `NodeNext`, not a mistake. `jest.config.ts` maps it back to the `.ts` file.
 - **TypeScript is pinned to 6.x.** ts-jest declares `typescript >=4.3 <7`, so TS 7 breaks
   the test toolchain. Moving to 7 means changing test runners or waiting on ts-jest.
@@ -87,8 +98,8 @@ file rather than inventing a new one.
 
 `getMember()` can return either a `GuildMember` (with a `displayName` getter) or a raw
 `APIInteractionDataResolvedGuildMember` (with `nick`). `resolveDisplayName` in
-`interaction.ts` handles both; it uses an `in` check rather than `instanceof` so plain
-object fixtures work in tests.
+`commands/roast/handler.ts` handles both; it uses an `in` check rather than `instanceof`
+so plain object fixtures work in tests.
 
 ## CI
 

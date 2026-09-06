@@ -1,18 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
 import { ApplicationCommandOptionType, ApplicationCommandType } from 'discord.js';
 import type { APIApplicationCommandUserOption } from 'discord.js';
-import { commands, roastCommand } from '../src/commands.js';
+import { roastCommand } from '../../../src/commands/roast/command.js';
 
 describe('/roast command definition', () => {
-  const [roast] = commands;
-
-  if (!roast) {
-    throw new Error('expected a command to be defined');
-  }
-
-  it('exposes exactly one command', () => {
-    expect(commands).toHaveLength(1);
-  });
+  const roast = roastCommand.toJSON();
 
   it('is a chat input command named "roast"', () => {
     expect(roast.name).toBe('roast');
@@ -39,9 +31,5 @@ describe('/roast command definition', () => {
     expect(userOption.name).toBe('user');
     expect(userOption.required).toBe(true);
     expect(userOption.description.length).toBeGreaterThan(0);
-  });
-
-  it('serializes to the same payload the builder produces', () => {
-    expect(roast).toEqual(roastCommand.toJSON());
   });
 });

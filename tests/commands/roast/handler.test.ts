@@ -1,6 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import Anthropic from '@anthropic-ai/sdk';
-import type { GuildMember, Interaction, User } from 'discord.js';
+import type { ChatInputCommandInteraction, GuildMember, User } from 'discord.js';
 
 const generateRoast = jest.fn<(displayName: string) => Promise<string>>();
 
@@ -11,10 +10,33 @@ class RoastRefusedError extends Error {
   }
 }
 
-jest.unstable_mockModule('../src/roast.js', () => ({ generateRoast, RoastRefusedError }));
+type Reason =
+  | 'rate_limited'
+  | 'authentication'
+  | 'api_error'
+  | 'empty_response'
+  | 'unknown';
 
-const { handleInteraction, errorMessage, resolveDisplayName } = await import(
-  '../src/interaction.js'
+class RoastUnavailableError extends Error {
+  readonly reason: Reason;
+  readonly status: number | undefined;
+
+  constructor(reason: Reason, message: string, status?: number) {
+    super(message);
+    this.name = 'RoastUnavailableError';
+    this.reason = reason;
+    this.status = status;
+  }
+}
+
+jest.unstable_mockModule('../../../src/commands/roast/generate.js', () => ({
+  generateRoast,
+  RoastRefusedError,
+  RoastUnavailableError,
+}));
+
+const { execute, errorMessage, resolveDisplayName } = await import(
+  '../../../src/commands/roast/handler.js'
 );
 
 const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -67,9 +89,9 @@ function makeInteraction({
   };
 }
 
-/** The handler takes a real `Interaction`; the fake stands in for one. */
+/** `execute` takes a real interaction; the fake stands in for one. */
 function dispatch(interaction: FakeInteraction): Promise<void> {
-  return handleInteraction(interaction as unknown as Interaction);
+  return execute(interaction as unknown as ChatInputCommandInteraction);
 }
 
 beforeEach(() => {
@@ -82,25 +104,7 @@ afterAll(() => {
   consoleError.mockRestore();
 });
 
-describe('interaction routing', () => {
-  it('ignores interactions that are not chat input commands', async () => {
-    const interaction = makeInteraction({ isChatInputCommand: false });
-
-    await dispatch(interaction);
-
-    expect(interaction.deferReply).not.toHaveBeenCalled();
-    expect(generateRoast).not.toHaveBeenCalled();
-  });
-
-  it('ignores other slash commands', async () => {
-    const interaction = makeInteraction({ commandName: 'ping' });
-
-    await dispatch(interaction);
-
-    expect(interaction.deferReply).not.toHaveBeenCalled();
-    expect(generateRoast).not.toHaveBeenCalled();
-  });
-
+describe('reply lifecycle', () => {
   it('defers the reply before the slow API call', async () => {
     const interaction = makeInteraction();
     let deferredFirst = false;
@@ -221,21 +225,27 @@ describe('errorMessage', () => {
   });
 
   it('describes a rate limit', () => {
-    const error = new Anthropic.RateLimitError(429, undefined, 'slow down', new Headers());
+    const error = new RoastUnavailableError('rate_limited', 'slow down', 429);
 
     expect(errorMessage(error)).toMatch(/too many roasts/i);
   });
 
   it('describes an authentication failure', () => {
-    const error = new Anthropic.AuthenticationError(401, undefined, 'bad key', new Headers());
+    const error = new RoastUnavailableError('authentication', 'bad key', 401);
 
     expect(errorMessage(error)).toMatch(/api key/i);
   });
 
   it('includes the status for other API errors', () => {
-    const error = new Anthropic.InternalServerError(503, undefined, 'oops', new Headers());
+    const error = new RoastUnavailableError('api_error', 'oops', 503);
 
     expect(errorMessage(error)).toContain('503');
+  });
+
+  it('falls back to the generic message for an empty response', () => {
+    const error = new RoastUnavailableError('empty_response', 'no text');
+
+    expect(errorMessage(error)).toMatch(/something went wrong/i);
   });
 
   it('has a generic fallback for unknown errors', () => {
