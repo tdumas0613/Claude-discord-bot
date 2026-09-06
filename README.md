@@ -203,7 +203,14 @@ wiring that logs in or calls Discord's REST API on import.
 ## Continuous integration
 
 `.github/workflows/ci.yml` type-checks, builds, and runs the tests on every push and pull
-request, against Node 24.
+request, against Node 24. It also runs dependency scanning (SCA) in a parallel job:
+`npm audit` over the whole installed tree, plus `dependency-review-action` on pull requests
+to review what the PR adds. Both fail the build at high severity or above.
+
+`.github/workflows/codeql.yml` runs CodeQL (SAST) over the TypeScript and over the workflow
+files themselves — on pushes to `main`, on every pull request, and weekly on a schedule so
+newly published queries get applied to unchanged code. Findings appear under the
+repository's Security → Code scanning tab. CodeQL is free on public repositories.
 
 ## License
 

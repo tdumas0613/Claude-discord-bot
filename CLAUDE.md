@@ -96,6 +96,20 @@ object fixtures work in tests.
 on Node 24 only (the current LTS, also pinned in `.nvmrc` and `engines`). Keep the README's
 CI section, `.nvmrc`, and `engines` in sync with the matrix if it changes.
 
+Security scanning is split by what it looks at:
+
+- **SCA** — the `sca` job in `ci.yml`. `npm audit --audit-level=high` scans the whole
+  installed tree on every push; `dependency-review-action` additionally reviews what a PR
+  *adds*, on pull requests only. Both fail the build at high or critical. A blocked build
+  means bump the dependency — do not add an ignore without asking.
+- **SAST** — `.github/workflows/codeql.yml`, on pushes to `main`, all PRs, and weekly.
+  Analyzes `javascript-typescript` and `actions` (the workflow files). Results go to the
+  Security tab; CodeQL does not fail the build unless branch protection is set to require
+  it. `build-mode: none` is correct here — nothing needs compiling to build the database.
+
+The two workflows are deliberately separate: CodeQL needs `security-events: write`, and
+that permission should not be granted to the job that runs the test suite.
+
 `@types/node` is pinned as a direct devDependency to match the runtime major. Without the
 pin it resolves transitively to whatever a dependency happens to pull in, which can describe
 a different Node than the one the project runs on.

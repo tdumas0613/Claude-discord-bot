@@ -43,3 +43,35 @@ jobs:
 
       - name: Run unit tests
         run: npm test -- --ci
+
+  # Software Composition Analysis: what's wrong with the dependencies we pull in.
+  # Static analysis of our own code lives in codeql.yml.
+  sca:
+    name: Dependency scan (SCA)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Audits the whole installed tree, so it also catches advisories published
+      # against dependencies that were already here. Fails on high and critical.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      # Complements the audit by reviewing what this PR *adds* — including
+      # licences — rather than the tree as a whole. Pull requests only.
+      - name: Review dependencies added by this pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
