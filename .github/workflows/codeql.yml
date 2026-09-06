@@ -1,0 +1,60 @@
+name: CodeQL
+
+# Static Application Security Testing. Free on public repositories; results land
+# in the repository's Security → Code scanning tab. Dependency scanning (SCA)
+# lives in ci.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Re-scan unchanged code weekly: new queries ship regularly, so a clean scan
+  # today is not a clean scan next month.
+  schedule:
+    - cron: '27 3 * * 1'
+  # Allows an on-demand scan of any branch from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required to upload results to the code scanning API.
+      security-events: write
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The bot's own TypeScript.
+          - language: javascript-typescript
+          # The workflow files themselves — catches things like script injection
+          # through untrusted GitHub context values.
+          - language: actions
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # No compilation step is needed to build a database for interpreted
+          # languages, so skip the build entirely.
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:${{ matrix.language }}'
