@@ -1,10 +1,10 @@
 import type {
   APIInteractionDataResolvedGuildMember,
+  ChatInputCommandInteraction,
   GuildMember,
-  Interaction,
   User,
 } from 'discord.js';
-import { generateRoast, RoastRefusedError, RoastUnavailableError } from './roast.js';
+import { generateRoast, RoastRefusedError, RoastUnavailableError } from './generate.js';
 
 /** What `ChatInputCommandInteraction#options.getMember` can hand back. */
 type ResolvedMember = GuildMember | APIInteractionDataResolvedGuildMember | null;
@@ -25,14 +25,10 @@ export function resolveDisplayName(user: User, member: ResolvedMember): string {
 }
 
 /**
- * Handles a single interaction from Discord. Ignores anything that is not the
- * `/roast` chat input command.
+ * Runs `/roast`. The registry has already matched the command name, so this
+ * only deals with the roast itself.
  */
-export async function handleInteraction(interaction: Interaction): Promise<void> {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'roast') {
-    return;
-  }
-
+export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
   const target = interaction.options.getUser('user', true);
   const displayName = resolveDisplayName(target, interaction.options.getMember('user'));
 

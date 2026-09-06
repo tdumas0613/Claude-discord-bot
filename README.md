@@ -41,7 +41,7 @@ That's strong, but a prompt is not a guarantee. Two things worth doing on a publ
   pull the command if it does.
 
 If you'd rather nobody could be roasted without opting in, that's a change to
-`src/interaction.ts`, and a reasonable one.
+`src/commands/roast/handler.ts`, and a reasonable one.
 
 ## What it costs
 
@@ -122,23 +122,39 @@ Everything below is for people reading or changing the code.
 
 ## How a roast happens
 
-`index.ts` logs in and forwards every interaction to `interaction.ts`, which decides
-whether it's a `/roast`, works out which name to use, and defers the reply — Discord wants
-an acknowledgement within three seconds, and the API call takes longer. It then calls
-`roast.ts`, which owns the system prompt and the Claude request, and posts whatever comes
-back.
+`bot/index.ts` logs in and hands every interaction to the registry in `commands/index.ts`,
+which matches the command name and calls that command's `execute`. For `/roast` that is
+`commands/roast/handler.ts`: it works out which name to use and defers the reply — Discord
+wants an acknowledgement within three seconds, and the API call takes longer — then calls
+`commands/roast/generate.ts` and posts whatever comes back.
 
-| File                             | Role                                                          |
-| -------------------------------- | ------------------------------------------------------------- |
-| `src/index.ts`                   | Creates the client, wires up events, logs in                  |
-| `src/interaction.ts`             | Handles the `/roast` interaction and formats replies          |
-| `src/roast.ts`                   | System prompt and the Claude API call                         |
-| `src/commands.ts`                | Slash command definition, shared with the registration script |
-| `src/register-slash-commands.ts` | Registers the command with Discord (`npm run register`)       |
-| `src/config.ts`                  | Loads and validates environment variables                     |
+```
+src/
+  bot/
+    index.ts                    entrypoint: creates the client, logs in
+    register-slash-commands.ts  entrypoint: npm run register
+  commands/
+    index.ts                    registry + router: name -> command
+    types.ts                    the BotCommand shape each command exports
+    roast/
+      index.ts                  the command as the registry sees it
+      command.ts                slash command definition
+      handler.ts                runs /roast, formats replies
+      generate.ts               the Claude API call
+      prompt.ts                 the system prompt
+  config.ts                     environment variables
+```
 
-The split between `index.ts` and `interaction.ts` exists so the handler can be imported by
-a test without logging into Discord. Worth preserving.
+Adding a second command is: a new folder under `commands/`, exporting a `BotCommand`
+from its `index.ts`, plus one line in `commands/index.ts`. Nothing else changes.
+
+`src/bot/` holds the two entrypoints — they act on import (logging in, calling Discord's
+REST API), which is exactly why everything else lives outside them and can be imported by a
+test without touching the network. Worth preserving.
+
+The Anthropic SDK is imported in exactly one file, `commands/roast/generate.ts`. It
+translates SDK exceptions into a `RoastUnavailableError` carrying a `reason`, so the
+Discord-facing code never sees a vendor type.
 
 Picking the name to roast is fiddlier than it looks: Discord may hand back either a full
 `GuildMember` with a `displayName` getter, or a raw resolved member carrying `nick`.
@@ -197,8 +213,8 @@ Discord interaction are stubbed.
 Note that the prompt's guardrails are asserted by tests — loosening the system prompt will
 fail the suite, which is intentional.
 
-`src/index.ts` and `src/register-slash-commands.ts` are excluded from coverage; they are thin
-wiring that logs in or calls Discord's REST API on import.
+`src/bot/**` is excluded from coverage; those are thin entrypoints that log in or call
+Discord's REST API on import. Everything else is at 100%.
 
 ## Continuous integration
 

@@ -55,14 +55,14 @@ jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
 }));
 
 // Stub config so the tests never touch a real .env file or exit the process.
-jest.unstable_mockModule('../src/config.js', () => ({
+jest.unstable_mockModule('../../../src/config.js', () => ({
   ANTHROPIC_API_KEY: 'test-anthropic-key',
   DISCORD_TOKEN: 'test-discord-token',
   DISCORD_CLIENT_ID: null,
   DISCORD_GUILD_ID: null,
 }));
 
-const { generateRoast, RoastRefusedError } = await import('../src/roast.js');
+const { generateRoast, RoastRefusedError } = await import('../../../src/commands/roast/generate.js');
 
 /** Builds a minimal Messages API response. */
 function response({
@@ -246,6 +246,17 @@ describe('SDK error translation', () => {
     await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
       name: 'RoastUnavailableError',
       reason: 'unknown',
+      message: 'network down',
+    });
+  });
+
+  it('stringifies a thrown value that is not an Error', async () => {
+    create.mockRejectedValue('socket hang up');
+
+    await expect(generateRoast('Bartholomew')).rejects.toMatchObject({
+      name: 'RoastUnavailableError',
+      reason: 'unknown',
+      message: 'socket hang up',
     });
   });
 

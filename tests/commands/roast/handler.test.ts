@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import type { GuildMember, Interaction, User } from 'discord.js';
+import type { ChatInputCommandInteraction, GuildMember, User } from 'discord.js';
 
 const generateRoast = jest.fn<(displayName: string) => Promise<string>>();
 
@@ -29,14 +29,14 @@ class RoastUnavailableError extends Error {
   }
 }
 
-jest.unstable_mockModule('../src/roast.js', () => ({
+jest.unstable_mockModule('../../../src/commands/roast/generate.js', () => ({
   generateRoast,
   RoastRefusedError,
   RoastUnavailableError,
 }));
 
-const { handleInteraction, errorMessage, resolveDisplayName } = await import(
-  '../src/interaction.js'
+const { execute, errorMessage, resolveDisplayName } = await import(
+  '../../../src/commands/roast/handler.js'
 );
 
 const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -89,9 +89,9 @@ function makeInteraction({
   };
 }
 
-/** The handler takes a real `Interaction`; the fake stands in for one. */
+/** `execute` takes a real interaction; the fake stands in for one. */
 function dispatch(interaction: FakeInteraction): Promise<void> {
-  return handleInteraction(interaction as unknown as Interaction);
+  return execute(interaction as unknown as ChatInputCommandInteraction);
 }
 
 beforeEach(() => {
@@ -104,25 +104,7 @@ afterAll(() => {
   consoleError.mockRestore();
 });
 
-describe('interaction routing', () => {
-  it('ignores interactions that are not chat input commands', async () => {
-    const interaction = makeInteraction({ isChatInputCommand: false });
-
-    await dispatch(interaction);
-
-    expect(interaction.deferReply).not.toHaveBeenCalled();
-    expect(generateRoast).not.toHaveBeenCalled();
-  });
-
-  it('ignores other slash commands', async () => {
-    const interaction = makeInteraction({ commandName: 'ping' });
-
-    await dispatch(interaction);
-
-    expect(interaction.deferReply).not.toHaveBeenCalled();
-    expect(generateRoast).not.toHaveBeenCalled();
-  });
-
+describe('reply lifecycle', () => {
   it('defers the reply before the slow API call', async () => {
     const interaction = makeInteraction();
     let deferredFirst = false;

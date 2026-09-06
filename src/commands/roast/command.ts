@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from 'discord.js';
-import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
 
+/** The `/roast` slash command definition, registered with Discord. */
 export const roastCommand = new SlashCommandBuilder()
   .setName('roast')
   .setDescription('Generate a short, playful roast of someone.')
@@ -10,7 +10,3 @@ export const roastCommand = new SlashCommandBuilder()
       .setDescription('The victim')
       .setRequired(true),
   );
-
-export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
-  roastCommand.toJSON(),
-];

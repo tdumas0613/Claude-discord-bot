@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_API_KEY } from './config.js';
+import { ANTHROPIC_API_KEY } from '../../config.js';
 import { SYSTEM_PROMPT } from './prompt.js';
 
 const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
