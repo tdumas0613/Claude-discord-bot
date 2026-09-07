@@ -44,6 +44,44 @@ jobs:
       - name: Run unit tests
         run: npm test -- --ci
 
+  # The CDK app is a separate package with its own dependencies, so it gets its
+  # own install. `cdk synth` is the real test of the stack: it runs esbuild over
+  # the Lambda entrypoints, which is where a broken import surfaces.
+  infra:
+    name: Infrastructure (CDK)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Bundling resolves the bot's dependencies from the repository root, so
+      # both trees have to be installed.
+      - name: Install bot dependencies
+        run: npm ci
+
+      - name: Install infrastructure dependencies
+        run: npm ci --prefix infra
+
+      - name: Type-check the stack
+        run: npm run typecheck --prefix infra
+
+      - name: Test the stack
+        run: npm test --prefix infra -- --ci
+
+      # Placeholder values: synth only needs them to be present and well formed.
+      - name: Synthesize the stack
+        run: npm run synth --prefix infra
+        env:
+          DISCORD_CLIENT_ID: '000000000000000000'
+          DISCORD_PUBLIC_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+
   # Software Composition Analysis: what's wrong with the dependencies we pull in.
   # Static analysis of our own code lives in codeql.yml.
   sca:

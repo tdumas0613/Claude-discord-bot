@@ -1,14 +1,12 @@
 import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { createHandler } from '../../../src/lambda/responder/handler.js';
 import type { WorkerEvent } from '../../../src/lambda/events.js';
 
-const findCommand = jest.fn<(name: string) => unknown>();
-
-jest.unstable_mockModule('../../../src/commands/index.js', () => ({
-  commands: [],
-  findCommand,
-}));
-
-const { createHandler } = await import('../../../src/lambda/responder/handler.js');
+/**
+ * Nothing is mocked out of `commands/` here. The responder deliberately reads
+ * only `commands/names.ts` — a list with no imports — so a static import is
+ * safe and the test exercises the same lookup production does.
+ */
 
 const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -43,8 +41,6 @@ beforeEach(() => {
   dispatch.mockResolvedValue(undefined);
   isValidRequest.mockReset();
   isValidRequest.mockReturnValue(true);
-  findCommand.mockReset();
-  findCommand.mockReturnValue({ definition: { name: 'roast' }, run: jest.fn() });
   consoleError.mockClear();
 });
 
@@ -127,9 +123,9 @@ describe('application commands', () => {
   });
 
   it('replies immediately for a command it does not know', async () => {
-    findCommand.mockReturnValue(undefined);
+    const unknown = { ...roastCommand, data: { name: 'not-a-command' } };
 
-    const payload = JSON.parse((await handler()(request(roastCommand))).body);
+    const payload = JSON.parse((await handler()(request(unknown))).body);
 
     expect(payload.type).toBe(4);
     expect(dispatch).not.toHaveBeenCalled();

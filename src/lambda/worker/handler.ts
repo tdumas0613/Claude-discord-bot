@@ -2,6 +2,7 @@ import { findCommand } from '../../commands/index.js';
 import type { WorkerEvent } from '../events.js';
 import { toCommandRequest } from '../interaction.js';
 import { editOriginalResponse } from './discord-api.js';
+import { loadAnthropicKey } from './secrets.js';
 
 /** Shown when the command itself blew up in a way `run` could not absorb. */
 const UNEXPECTED_FAILURE = 'Something went wrong writing that roast. Try again shortly.';
@@ -20,6 +21,11 @@ export async function handler(event: WorkerEvent): Promise<void> {
   let mentions: readonly string[] = [];
 
   try {
+    // Inside the try, not in `index.ts`: an unreadable secret has to reach the
+    // user as a message like any other failure. Wiring it into the entrypoint
+    // would create a path that dies before the follow-up guarantee applies.
+    await loadAnthropicKey();
+
     const request = toCommandRequest(interaction);
     const command = findCommand(request.commandName);
 
@@ -34,8 +40,9 @@ export async function handler(event: WorkerEvent): Promise<void> {
       content = 'That command is not wired up on my end.';
     }
   } catch (error) {
-    // `run` is documented not to throw; if it did, still answer the user.
-    console.error('Command threw instead of returning a reply:', error);
+    // `run` is documented not to throw, and neither should the key lookup; if
+    // either did, still answer the user.
+    console.error('The worker failed before it could produce a reply:', error);
   }
 
   await editOriginalResponse({ applicationId, interactionToken, content, mentions });

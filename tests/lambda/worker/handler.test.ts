@@ -5,9 +5,11 @@ import type { WorkerEvent } from '../../../src/lambda/events.js';
 const run = jest.fn<(request: CommandRequest) => Promise<CommandReply>>();
 const findCommand = jest.fn<(name: string) => unknown>();
 const editOriginalResponse = jest.fn<(input: unknown) => Promise<void>>();
+const loadAnthropicKey = jest.fn<() => Promise<void>>();
 
 jest.unstable_mockModule('../../../src/commands/index.js', () => ({ commands: [], findCommand }));
 jest.unstable_mockModule('../../../src/lambda/worker/discord-api.js', () => ({ editOriginalResponse }));
+jest.unstable_mockModule('../../../src/lambda/worker/secrets.js', () => ({ loadAnthropicKey }));
 
 const { handler } = await import('../../../src/lambda/worker/handler.js');
 
@@ -33,6 +35,8 @@ beforeEach(() => {
   findCommand.mockReturnValue({ definition: { name: 'roast' }, run });
   editOriginalResponse.mockReset();
   editOriginalResponse.mockResolvedValue(undefined);
+  loadAnthropicKey.mockReset();
+  loadAnthropicKey.mockResolvedValue(undefined);
   consoleError.mockClear();
 });
 
@@ -87,6 +91,35 @@ describe('worker', () => {
     await handler(event);
 
     expect(editOriginalResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers the user when the API key cannot be read', async () => {
+    // The key lookup happens inside the follow-up guarantee, so an
+    // unreadable secret is a message, not a placeholder left on screen.
+    loadAnthropicKey.mockRejectedValue(new Error('AccessDeniedException'));
+
+    await handler(event);
+
+    expect(run).not.toHaveBeenCalled();
+    expect(editOriginalResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringMatching(/something went wrong/i) }),
+    );
+    expect(consoleError).toHaveBeenCalled();
+  });
+
+  it('resolves the API key before running the command', async () => {
+    const order: string[] = [];
+    loadAnthropicKey.mockImplementation(async () => {
+      order.push('secret');
+    });
+    run.mockImplementation(async () => {
+      order.push('run');
+      return { content: 'roasted', mentions: [] };
+    });
+
+    await handler(event);
+
+    expect(order).toEqual(['secret', 'run']);
   });
 
   it('propagates a failed follow-up so the invocation is retried', async () => {

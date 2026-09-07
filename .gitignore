@@ -21,6 +21,10 @@ pnpm-debug.log*
 dist/
 build/
 coverage/
+
+# CDK synth output and staged bundles
+infra/cdk.out/
+.cdk.staging/
 .cache/
 *.tsbuildinfo
 tsconfig.tsbuildinfo

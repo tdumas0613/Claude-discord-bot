@@ -14,6 +14,7 @@ npm run typecheck                    # tsc over src/ AND tests/ (tsconfig.json)
 npm run build                        # emit src/ -> dist/ (tsconfig.build.json)
 npm test                             # full Jest suite
 npm test -- tests/lambda             # one folder
+npm test --prefix infra              # CDK stack tests (separate package)
 npm test -- -t "enables server-side" # one test by name
 npm run test:coverage                # coverage (currently 100% on covered modules)
 npm start                            # builds first via prestart, runs dist/bot/index.js
@@ -49,8 +50,14 @@ a reply, because every transport has a waiting user to answer. Do not reintroduc
 discord.js types into `commands/`; that dependency is what made Lambda impossible.
 
 Adding a command is a new folder under `commands/` exporting a `BotCommand` from its
-`index.ts`, plus one entry in the registry map. Do not add command-specific branching
-to a transport.
+`index.ts`, plus one entry in the registry map **and** one in `commands/names.ts`. Do not
+add command-specific branching to a transport.
+
+`commands/names.ts` is a duplicate of the registry's keys on purpose. The responder
+Lambda needs to know whether a name is ours, and importing the registry to ask would pull
+`discord.js` (via `roast/command.ts`) and the Anthropic SDK (via `roast/generate.ts`)
+into the bundle with three seconds to cold-start — about 1.5 MB of it. Keep that module
+import-free. `tests/commands/names.test.ts` fails if the two disagree.
 
 ### The Lambda pair
 
@@ -79,6 +86,13 @@ endpoint with deliberately invalid signatures and will not register a URL that a
 them, so verify against the *raw* body: parsing and re-serializing changes the bytes and
 breaks the signature.
 
+`lambda/worker/secrets.ts` resolves `ANTHROPIC_API_KEY` from Secrets Manager into
+`process.env` before the command runs, because `commands/roast/generate.ts` reads it from
+there and must not learn about AWS. It is called from inside `worker/handler.ts`'s try
+block, not from `worker/index.ts`: an unreadable secret has to reach the user as a
+message like any other failure. An `ANTHROPIC_API_KEY` already in the environment always
+wins, so local runs and tests never reach for AWS.
+
 `lambda/worker/discord-api.ts` is the follow-up call. It is the same route discord.js reaches
 through `interaction.editReply` (`InteractionWebhook` → `/webhooks/{app}/{token}
 /messages/@original`), authorized by the interaction token, valid 15 minutes. No bot
@@ -97,6 +111,39 @@ point, and `tests/anthropic-contract.test.ts` guards the class hierarchy it reli
 `failFast` for CLI entrypoints. It must **not** `process.exit` at import: in Lambda that
 turns a fixable configuration mistake into a container crash. `generate.ts` builds its
 Anthropic client lazily for the same reason.
+
+## Infrastructure
+
+`infra/` is a CDK app in its own npm package, with its own `package.json`, lock file and
+`node_modules`. That is deliberate: `aws-cdk-lib` stays out of the bot's dependency tree,
+out of its Lambda bundles, and out of what the SCA job audits. It is also CommonJS, unlike
+the bot — the CDK default, and what `cdk.json`'s ts-node invocation expects.
+
+```bash
+npm ci --prefix infra
+npm test --prefix infra          # stack assertions; no AWS account needed
+npm run synth --prefix infra     # the real check: runs esbuild over both entrypoints
+```
+
+`esbuild` is a devDependency of the **root** package, not just `infra/`. CDK runs
+`npx --no-install esbuild` with `projectRoot` as the working directory, and projectRoot is
+the repository root because that is where the Lambda sources and their dependencies are.
+Without it, bundling silently falls back to Docker.
+
+`lib/bot-stack.ts` holds both functions. Things there that are load-bearing:
+
+- Both entrypoints are `src/lambda/*/index.ts`. Bundling per entry is what keeps the
+  responder small — check with `npm run synth --prefix infra` and look at the reported
+  sizes; the responder should stay well under a megabyte.
+- The Function URL is `FunctionUrlAuthType.NONE` and must stay that way. Discord signs
+  with Ed25519 and cannot produce SigV4, so `responder/signature.ts` is the only guard.
+- The Anthropic secret is *referenced*, never created (`Secret.fromSecretNameV2`), so the
+  key stays out of the template and out of `cdk diff`.
+- `externalModules: []` bundles the AWS SDK rather than trusting the runtime's copy.
+
+`test/bot-stack.test.ts` asserts properties, not a snapshot: a snapshot would break on
+every CDK upgrade without telling us anything. It stubs bundling with the
+`aws:cdk:bundling-stacks: []` context so the tests do not run esbuild.
 
 ## The Claude API call
 

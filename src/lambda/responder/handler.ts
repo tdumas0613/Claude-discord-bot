@@ -1,4 +1,4 @@
-import { findCommand } from '../../commands/index.js';
+import { isCommandName } from '../../commands/names.js';
 import type { WorkerEvent } from '../events.js';
 import {
   InteractionResponseType,
@@ -88,8 +88,10 @@ export function createHandler(deps: ResponderDeps) {
       return { statusCode: 400, body: 'unsupported interaction type' };
     }
 
+    // Names only, not the registry: see `commands/names.ts` for why this
+    // Lambda must not import the commands themselves.
     const { commandName } = toCommandRequest(interaction);
-    if (!findCommand(commandName)) {
+    if (!isCommandName(commandName)) {
       return json(200, {
         type: InteractionResponseType.ChannelMessageWithSource,
         data: { content: 'I do not know that command.' },

@@ -1,0 +1,29 @@
+{
+  "name": "claude-discord-roast-bot-infra",
+  "version": "1.0.0",
+  "description": "CDK app deploying the /roast bot's responder and worker Lambdas.",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "jest",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.13.3",
+    "aws-cdk": "^2.1029.0",
+    "aws-cdk-lib": "^2.223.0",
+    "constructs": "^10.4.2",
+    "esbuild": "^0.25.10",
+    "jest": "^30.5.1",
+    "ts-jest": "^29.4.12",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  }
+}

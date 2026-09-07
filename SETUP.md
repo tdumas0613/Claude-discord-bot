@@ -159,6 +159,55 @@ After a few seconds the bot replies with a roast, mentioning the person.
 
 ---
 
+## Part 5 — Deploy to AWS (optional)
+
+Parts 1–4 keep a process running on your machine. This part moves the bot to Lambda, so
+it runs only when someone uses it and there is nothing to keep alive.
+
+You need the AWS CLI configured with credentials, and an account that has been
+bootstrapped for CDK (`npx cdk bootstrap`, once per account and region).
+
+**1. Put the Anthropic key in Secrets Manager.**
+
+The deployed worker reads the key from there rather than from an environment variable, so
+it never appears in a CloudFormation template or in the Lambda console.
+
+```bash
+aws secretsmanager create-secret \
+  --name claude-discord-roast-bot/anthropic-api-key \
+  --secret-string 'sk-ant-...'
+```
+
+**2. Install and deploy.**
+
+`infra/` is a separate npm package, so it needs its own install.
+
+```bash
+npm ci --prefix infra
+DISCORD_CLIENT_ID=... DISCORD_PUBLIC_KEY=... npm run deploy --prefix infra
+```
+
+Both values are on the Developer Portal's General Information page — the same ones from
+Part 1. Neither is a secret.
+
+**3. Point Discord at it.**
+
+The deploy prints an `InteractionsEndpointUrl`. Paste it into Developer Portal → your app
+→ General Information → **Interactions Endpoint URL**, and save.
+
+Discord immediately sends a request with a deliberately invalid signature and refuses the
+URL unless it is rejected. Saving successfully means signature verification works.
+
+**4. Register the command, if you haven't.**
+
+Slash commands are registered against the application, not the host, so if you already
+ran `npm run register` in Part 3 there is nothing to do. Otherwise run it now.
+
+Once the endpoint URL is set, Discord stops using the gateway connection for slash
+commands — you do not need `npm start` running any more.
+
+---
+
 ## Troubleshooting
 
 **`/roast` doesn't appear in the command menu.**
@@ -191,6 +240,15 @@ probably not running — check the terminal from Part 3, step 4.
 
 **The bot replies "My Claude API key is not working."**
 `ANTHROPIC_API_KEY` is wrong or has no credit. Check it in the Anthropic console.
+
+**On AWS: the reply stays "thinking…" forever.**
+The responder deferred but the worker never edited the reply. Check the worker's log
+group in CloudWatch — the most likely cause is that it could not read the secret, which
+also shows up as a "Something went wrong" reply rather than a hang.
+
+**On AWS: Discord won't save the Interactions Endpoint URL.**
+The responder is not returning 401 for a bad signature. Check that `DISCORD_PUBLIC_KEY`
+in the deploy matches the application's Public Key, and redeploy.
 
 **`Cannot find module ... /src/config.js`**
 You ran a file in `src/` directly. Always use `npm start` and `npm run register`, which

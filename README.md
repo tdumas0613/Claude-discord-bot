@@ -151,15 +151,21 @@ src/
       index.ts                  entrypoint
       handler.ts                run the command, edit the deferred reply
       discord-api.ts            the follow-up PATCH
+      secrets.ts                the Anthropic key, from Secrets Manager
   commands/                     transport-agnostic command logic
     index.ts                    registry: name -> command
+    names.ts                    just the names, for the responder
     types.ts                    CommandRequest / CommandReply / BotCommand
     roast/                      index · command · handler · generate · prompt
   config.ts                     environment variables
+infra/                          the CDK app that deploys the two functions
+  bin/app.ts                    reads config, instantiates the stack
+  lib/bot-stack.ts              the functions, the URL, the permissions
 ```
 
 Adding a second command is: a new folder under `commands/`, exporting a `BotCommand`
-from its `index.ts`, plus one line in `commands/index.ts`. Nothing else changes.
+from its `index.ts`, plus one line in `commands/index.ts` and one in `commands/names.ts`.
+A test fails if you forget the second.
 
 Entrypoints act on import — logging in, calling Discord's REST API, reading AWS config —
 which is why everything else lives outside them and can be imported by a test without
@@ -173,6 +179,60 @@ Picking the name to roast is fiddlier than it looks, and each transport does it 
 different shape: the gateway from discord.js objects (which come as either a `GuildMember`
 with a `displayName` getter or a raw resolved member carrying `nick`), Lambda from the raw
 `resolved` JSON. Both apply the same precedence — nickname, global display name, username.
+
+## Deploying to AWS
+
+`infra/` is a CDK app — a separate npm package, so `aws-cdk-lib` never lands in the
+bot's dependency tree or its Lambda bundles.
+
+```bash
+cd infra
+npm install
+npm test                    # asserts the stack's shape, no AWS account needed
+npm run synth               # bundles both functions with esbuild
+npm run deploy
+```
+
+Two functions come out of it, each bundled from its own entrypoint:
+
+| | Responder | Worker |
+|---|---|---|
+| Entrypoint | `src/lambda/responder/index.ts` | `src/lambda/worker/index.ts` |
+| Trigger | Function URL, unauthenticated | asynchronous invoke, from the responder |
+| Timeout | 5s | 60s |
+| Bundle | ~0.5 MB | ~1.9 MB |
+
+The responder's bundle is the small one on purpose. It has to cold-start inside
+Discord's three seconds, so it reads `commands/names.ts` — a list of names that imports
+nothing — instead of the registry, which would drag in `discord.js` and the Anthropic
+SDK behind it. That one import is worth about 1.5 MB.
+
+The Function URL is unauthenticated because it has to be: Discord signs each request
+with the application's Ed25519 key and cannot produce SigV4. `responder/signature.ts` is
+what guards it, and Discord probes the endpoint with deliberately invalid signatures
+before it will accept the URL.
+
+Before the first deploy, put the Anthropic key in Secrets Manager — CDK references the
+secret rather than creating it, so the value never appears in a template or in
+`cdk diff`:
+
+```bash
+aws secretsmanager create-secret \
+  --name claude-discord-roast-bot/anthropic-api-key \
+  --secret-string 'sk-ant-...'
+```
+
+Then deploy with the application's public identifiers, and paste the
+`InteractionsEndpointUrl` output into Developer Portal → General Information →
+Interactions Endpoint URL. Discord verifies the endpoint at that moment, so the stack
+has to be deployed first.
+
+```bash
+DISCORD_CLIENT_ID=... DISCORD_PUBLIC_KEY=... npm run deploy --prefix infra
+```
+
+Neither of those is a secret — the client ID is public, and the public key exists to be
+published — which is why they are plain environment variables and the API key is not.
 
 ## The Claude API call
 
@@ -235,6 +295,10 @@ Discord's REST API on import. Everything else is at 100%.
 request, against Node 24. It also runs dependency scanning (SCA) in a parallel job:
 `npm audit` over the whole installed tree, plus `dependency-review-action` on pull requests
 to review what the PR adds. Both fail the build at high severity or above.
+
+A third job installs `infra/`, type-checks it, runs the stack's tests, and synthesizes
+it. Synth is the part that matters: it runs esbuild over both Lambda entrypoints, so a
+broken import fails CI rather than a deploy.
 
 `.github/workflows/codeql.yml` runs CodeQL (SAST) over the TypeScript and over the workflow
 files themselves — on pushes to `main`, on every pull request, and weekly on a schedule so
