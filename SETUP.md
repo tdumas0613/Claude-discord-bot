@@ -261,9 +261,21 @@ repository root does the same:
 ```bash
 cd infra
 npm ci
-npx cdk bootstrap aws://<account-id>/us-east-2
+npx cdk bootstrap aws://<account-id>/us-east-2 \
+  -c DISCORD_CLIENT_ID=<application-id> \
+  -c DISCORD_PUBLIC_KEY=<public-key>
 cd ..
 ```
+
+Bootstrapping does not use those two values — it only creates the `CDKToolkit` stack —
+but it does need them present. Because there is a `cdk.json` in this directory, the CDK
+CLI executes the app to look for any further environments to bootstrap, and `bin/app.ts`
+refuses to build a stack without them. Passing them with `-c` satisfies that; any value
+would get you past it, but the real ones are what you want everywhere else.
+
+Both are on the Developer Portal's **General Information** page: the **Application ID**
+and, just below it, the 64-character hex **Public Key**. Neither is a secret — the public
+key exists so that anyone can verify Discord's signatures — and neither is the bot token.
 
 The `cd ..` matters: the steps below write temporary policy files into the current
 directory, and they do not belong inside `infra/`.
