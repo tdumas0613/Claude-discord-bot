@@ -1,11 +1,11 @@
-import { findCommand } from '../commands/index.js';
+import { findCommand } from '../../commands/index.js';
+import type { WorkerEvent } from '../events.js';
 import {
   InteractionResponseType,
   InteractionType,
   parseInteraction,
   toCommandRequest,
-} from './interaction.js';
-import type { WorkerEvent } from './worker.js';
+} from '../interaction.js';
 
 /**
  * The slice of a Lambda Function URL request this handler reads (payload

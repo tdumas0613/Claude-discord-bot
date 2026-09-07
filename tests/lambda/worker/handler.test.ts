@@ -1,15 +1,15 @@
 import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import type { CommandReply, CommandRequest } from '../../src/commands/types.js';
-import type { WorkerEvent } from '../../src/lambda/worker.js';
+import type { CommandReply, CommandRequest } from '../../../src/commands/types.js';
+import type { WorkerEvent } from '../../../src/lambda/events.js';
 
 const run = jest.fn<(request: CommandRequest) => Promise<CommandReply>>();
 const findCommand = jest.fn<(name: string) => unknown>();
 const editOriginalResponse = jest.fn<(input: unknown) => Promise<void>>();
 
-jest.unstable_mockModule('../../src/commands/index.js', () => ({ commands: [], findCommand }));
-jest.unstable_mockModule('../../src/lambda/discord-api.js', () => ({ editOriginalResponse }));
+jest.unstable_mockModule('../../../src/commands/index.js', () => ({ commands: [], findCommand }));
+jest.unstable_mockModule('../../../src/lambda/worker/discord-api.js', () => ({ editOriginalResponse }));
 
-const { handler } = await import('../../src/lambda/worker.js');
+const { handler } = await import('../../../src/lambda/worker/handler.js');
 
 const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { editOriginalResponse } from '../../src/lambda/discord-api.js';
+import { editOriginalResponse } from '../../../src/lambda/worker/discord-api.js';
 
 /**
  * The follow-up is the only Discord REST call the worker makes. It is the same
