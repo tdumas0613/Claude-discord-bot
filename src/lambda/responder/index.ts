@@ -1,6 +1,6 @@
-import { requireEnv } from '../config.js';
+import { requireEnv } from '../../config.js';
 import { dispatchToWorker } from './dispatch.js';
-import { createHandler } from './responder.js';
+import { createHandler } from './handler.js';
 import { isValidRequest } from './signature.js';
 
 /**

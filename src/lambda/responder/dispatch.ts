@@ -1,5 +1,5 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import type { WorkerEvent } from './worker.js';
+import type { WorkerEvent } from '../events.js';
 
 /**
  * Starts the worker without waiting for it.

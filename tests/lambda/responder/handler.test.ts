@@ -1,14 +1,14 @@
 import { afterAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import type { WorkerEvent } from '../../src/lambda/worker.js';
+import type { WorkerEvent } from '../../../src/lambda/events.js';
 
 const findCommand = jest.fn<(name: string) => unknown>();
 
-jest.unstable_mockModule('../../src/commands/index.js', () => ({
+jest.unstable_mockModule('../../../src/commands/index.js', () => ({
   commands: [],
   findCommand,
 }));
 
-const { createHandler } = await import('../../src/lambda/responder.js');
+const { createHandler } = await import('../../../src/lambda/responder/handler.js');
 
 const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
 

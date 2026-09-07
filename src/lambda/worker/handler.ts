@@ -1,16 +1,7 @@
-import { findCommand } from '../commands/index.js';
+import { findCommand } from '../../commands/index.js';
+import type { WorkerEvent } from '../events.js';
+import { toCommandRequest } from '../interaction.js';
 import { editOriginalResponse } from './discord-api.js';
-import { toCommandRequest, type RawInteraction } from './interaction.js';
-
-/**
- * What the responder hands to the worker. Deliberately just the interaction
- * payload plus what is needed to address the follow-up.
- */
-export interface WorkerEvent {
-  applicationId: string;
-  interactionToken: string;
-  interaction: RawInteraction;
-}
 
 /** Shown when the command itself blew up in a way `run` could not absorb. */
 const UNEXPECTED_FAILURE = 'Something went wrong writing that roast. Try again shortly.';

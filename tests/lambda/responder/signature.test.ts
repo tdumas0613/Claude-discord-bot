@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { isValidRequest } from '../../src/lambda/signature.js';
+import { isValidRequest } from '../../../src/lambda/responder/signature.js';
 
 /**
  * Discord signs `timestamp + rawBody` with its application key and refuses to

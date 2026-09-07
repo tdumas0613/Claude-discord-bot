@@ -57,26 +57,36 @@ to a transport.
 Discord closes an interaction if the HTTP response takes over 3 seconds, and a roast
 takes longer, so acknowledgement and work happen in two invocations:
 
-- `lambda/responder.ts` — verifies the Ed25519 signature, answers PING with PONG,
-  invokes the worker asynchronously, then returns a type-5 deferral. Dispatch happens
-  *before* deferring so a failed hand-off can still be reported to the user.
-- `lambda/worker.ts` — runs the command and PATCHes the result into the deferred reply.
-  **Every path must end in a follow-up**: Discord never times the "thinking…"
+- `lambda/responder/handler.ts` — verifies the Ed25519 signature, answers PING with
+  PONG, invokes the worker asynchronously, then returns a type-5 deferral. Dispatch
+  happens *before* deferring so a failed hand-off can still be reported to the user.
+- `lambda/worker/handler.ts` — runs the command and PATCHes the result into the deferred
+  reply. **Every path must end in a follow-up**: Discord never times the "thinking…"
   placeholder out, so a worker that dies quietly leaves it on screen permanently.
 
-`lambda/signature.ts` uses `node:crypto` only — no dependency. Discord probes the
+One folder per deployed function, with what only that function needs inside it:
+`responder/` owns signature verification and dispatch, `worker/` owns the follow-up
+call. What both need stays flat in `lambda/` — `interaction.ts`, and `events.ts` for
+the `WorkerEvent` contract the responder writes and the worker reads. A file that
+would have to be imported across the two folders belongs at the top level instead.
+
+Each folder's `index.ts` is its deployed entrypoint, so the CDK stack points at
+`dist/lambda/responder/index.handler` and `dist/lambda/worker/index.handler`. Keep that
+shape when adding a function: entrypoint in `index.ts`, testable logic beside it.
+
+`lambda/responder/signature.ts` uses `node:crypto` only — no dependency. Discord probes the
 endpoint with deliberately invalid signatures and will not register a URL that accepts
 them, so verify against the *raw* body: parsing and re-serializing changes the bytes and
 breaks the signature.
 
-`lambda/discord-api.ts` is the follow-up call. It is the same route discord.js reaches
+`lambda/worker/discord-api.ts` is the follow-up call. It is the same route discord.js reaches
 through `interaction.editReply` (`InteractionWebhook` → `/webhooks/{app}/{token}
 /messages/@original`), authorized by the interaction token, valid 15 minutes. No bot
 token is involved.
 
-Everything outside `src/bot/`, `lambda/responder-entry.ts` and `lambda/dispatch.ts` is
-importable without side effects; those three are entrypoints or vendor wiring and are
-excluded from coverage.
+Everything outside `src/bot/`, the two `lambda/*/index.ts` entrypoints and
+`lambda/responder/dispatch.ts` is importable without side effects; those are entrypoints
+or vendor wiring and are excluded from coverage.
 
 The Anthropic SDK is imported in exactly ONE file: `commands/roast/generate.ts`. It
 translates SDK exceptions into `RoastUnavailableError` with a `reason`; transports branch

@@ -140,11 +140,17 @@ src/
     gateway.ts                  discord.js interaction -> command -> reply
     register-slash-commands.ts  entrypoint: npm run register
   lambda/                       the HTTP-interactions transport (AWS)
-    responder.ts                verify signature, PONG, defer, hand off
-    worker.ts                   run the command, edit the deferred reply
-    signature.ts                Ed25519 verification, no dependencies
     interaction.ts              raw Discord JSON -> command request
-    discord-api.ts              the follow-up PATCH
+    events.ts                   the WorkerEvent contract between the two
+    responder/                  invocation 1: answers within three seconds
+      index.ts                  entrypoint: reads config, builds the handler
+      handler.ts                verify signature, PONG, defer, hand off
+      signature.ts              Ed25519 verification, no dependencies
+      dispatch.ts               asynchronous invoke of the worker
+    worker/                     invocation 2: does the slow part
+      index.ts                  entrypoint
+      handler.ts                run the command, edit the deferred reply
+      discord-api.ts            the follow-up PATCH
   commands/                     transport-agnostic command logic
     index.ts                    registry: name -> command
     types.ts                    CommandRequest / CommandReply / BotCommand
