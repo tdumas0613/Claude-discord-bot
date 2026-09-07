@@ -165,8 +165,10 @@ Parts 1–4 keep a process running on your machine. This part moves the bot to L
 it runs only when someone uses it and there is nothing to keep alive.
 
 You need the AWS CLI signed in (`aws login`) and an account that has been bootstrapped
-for CDK (`npx cdk bootstrap`, once per account and region). Without an active sign-in,
-CDK fails with `no credentials have been configured`.
+for CDK — `cd infra && npm ci && npx cdk bootstrap aws://<account-id>/us-east-2`, once
+per account and region. The install comes first because the CDK CLI is a dependency of
+`infra/`, and without an active sign-in CDK fails with
+`no credentials have been configured`.
 
 **1. Put the Anthropic key in Secrets Manager.**
 
@@ -251,11 +253,20 @@ Skipping this is the usual cause of
 That error means the credential chain found *nothing* — it is not a permissions problem,
 and an expired sign-in looks exactly the same as never having signed in.
 
-**2. Bootstrap CDK** for the account and region, if you have not already:
+**2. Bootstrap CDK** for the account and region, if you have not already. Install
+`infra/`'s dependencies first — the pinned CDK CLI lives in that package, so without the
+install `npx` downloads a different version from the registry, and running from the
+repository root does the same:
 
 ```bash
+cd infra
+npm ci
 npx cdk bootstrap aws://<account-id>/us-east-2
+cd ..
 ```
+
+The `cd ..` matters: the steps below write temporary policy files into the current
+directory, and they do not belong inside `infra/`.
 
 **3. Register GitHub as an OIDC identity provider.** This is what lets a workflow prove
 which repository it is running in, so no AWS keys need to exist in GitHub at all:
