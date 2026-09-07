@@ -86,6 +86,15 @@ endpoint with deliberately invalid signatures and will not register a URL that a
 them, so verify against the *raw* body: parsing and re-serializing changes the bytes and
 breaks the signature.
 
+It also enforces a ±`MAX_TIMESTAMP_SKEW_SECONDS` (300s) freshness window. A signature
+proves a request came from Discord, not that it came from Discord *now*, and a captured
+request would otherwise replay forever — each replay a model call on our bill, through a
+signature we cannot revoke without rotating the application key. Because of that window,
+tests must build timestamps relative to `Date.now()`; a hardcoded one ages out and starts
+failing on its own. `tests/lambda/responder/endpoint.test.ts` drives the real
+`isValidRequest` through a Function-URL-shaped request and is the closest thing to
+Discord's own registration probe — the rest of the responder tests mock verification.
+
 `lambda/worker/secrets.ts` resolves `ANTHROPIC_API_KEY` from Secrets Manager into
 `process.env` before the command runs, because `commands/roast/generate.ts` reads it from
 there and must not learn about AWS. It is called from inside `worker/handler.ts`'s try
@@ -140,6 +149,17 @@ Without it, bundling silently falls back to Docker.
 - The Anthropic secret is *referenced*, never created (`Secret.fromSecretNameV2`), so the
   key stays out of the template and out of `cdk diff`.
 - `externalModules: []` bundles the AWS SDK rather than trusting the runtime's copy.
+- **Reserved concurrency**: 20 responder, 10 worker. It is what bounds the cost of a
+  public unauthenticated URL. Do not lower the worker's casually — it is invoked
+  asynchronously and Lambda retries throttled events with backoff, but the interaction
+  token dies 15 minutes after the interaction, and an event throttled past that produces
+  a follow-up Discord rejects, leaving the placeholder on screen forever.
+- The worker has an SQS `onFailure` destination for invocations that fail through every
+  retry. Nothing polls it; it is a place to look, surfaced as `WorkerFailureQueueUrl`.
+
+A deploy may fail on minimum unreserved concurrency if the account's limit is low — AWS
+requires 100 to stay unreserved. Lower the reservations or raise the quota; do not remove
+them.
 
 `test/bot-stack.test.ts` asserts properties, not a snapshot: a snapshot would break on
 every CDK upgrade without telling us anything. It stubs bundling with the

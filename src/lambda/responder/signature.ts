@@ -35,7 +35,34 @@ function toKey(publicKeyHex: string): KeyObject {
 }
 
 /**
- * True when the signature is valid for this exact body.
+ * How far Discord's timestamp may be from our clock, in seconds.
+ *
+ * A signature alone proves a request came from Discord, not that it came from
+ * Discord *just now*: without a window, a captured request can be replayed
+ * forever, and every replay is a real roast and a real model call charged to
+ * us. The signature cannot be revoked short of rotating the application key,
+ * so the timestamp is what bounds the damage.
+ *
+ * Symmetric, because the skew can run either way, and generous next to any
+ * cold start while still making a captured request useless within minutes.
+ */
+export const MAX_TIMESTAMP_SKEW_SECONDS = 300;
+
+/** True when the timestamp is close enough to now to not be a replay. */
+function isFresh(timestamp: string): boolean {
+  const seconds = Number(timestamp);
+
+  // Number('') is 0 and Number('abc') is NaN. Reject both here rather than
+  // letting the first read as 1970 and fail for the wrong reason.
+  if (!timestamp.trim() || !Number.isFinite(seconds)) {
+    return false;
+  }
+
+  return Math.abs(Date.now() / 1000 - seconds) <= MAX_TIMESTAMP_SKEW_SECONDS;
+}
+
+/**
+ * True when the signature is valid for this exact body, and recent.
  *
  * `rawBody` must be the bytes Discord sent, before any JSON parse and
  * re-stringify — re-serializing changes key order and whitespace, and the
@@ -53,6 +80,12 @@ export function isValidRequest({
   rawBody: string;
 }): boolean {
   if (!signature || !timestamp) {
+    return false;
+  }
+
+  // Before the cryptography: a stale request is refused whatever it is signed
+  // with, and this is far cheaper than a verify.
+  if (!isFresh(timestamp)) {
     return false;
   }
 

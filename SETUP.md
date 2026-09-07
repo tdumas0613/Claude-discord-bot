@@ -190,6 +190,13 @@ DISCORD_CLIENT_ID=... DISCORD_PUBLIC_KEY=... npm run deploy --prefix infra
 Both values are on the Developer Portal's General Information page — the same ones from
 Part 1. Neither is a secret.
 
+If the deploy fails complaining about **minimum unreserved concurrency**, the account's
+concurrent-execution limit is lower than the stack's reservations assume — new AWS
+accounts often start well below the usual 1,000, and AWS requires at least 100 to stay
+unreserved. Either lower `reservedConcurrentExecutions` in `infra/lib/bot-stack.ts` (20
+for the responder, 10 for the worker) or request a limit increase in the Service Quotas
+console.
+
 **3. Point Discord at it.**
 
 The deploy prints an `InteractionsEndpointUrl`. Paste it into Developer Portal → your app
@@ -242,13 +249,24 @@ probably not running — check the terminal from Part 3, step 4.
 `ANTHROPIC_API_KEY` is wrong or has no credit. Check it in the Anthropic console.
 
 **On AWS: the reply stays "thinking…" forever.**
-The responder deferred but the worker never edited the reply. Check the worker's log
-group in CloudWatch — the most likely cause is that it could not read the secret, which
-also shows up as a "Something went wrong" reply rather than a hang.
+The responder deferred but the worker never edited the reply. Two places to look, in
+order: the worker's log group in CloudWatch, and the dead-letter queue the deploy prints
+as `WorkerFailureQueueUrl`. Anything in that queue is an invocation that failed through
+every automatic retry — the message carries the original event and the error. Nothing
+polls it for you.
+
+A worker that could not read the secret shows up as a "Something went wrong" reply
+rather than a hang, so a genuine hang usually means the follow-up itself failed.
 
 **On AWS: Discord won't save the Interactions Endpoint URL.**
 The responder is not returning 401 for a bad signature. Check that `DISCORD_PUBLIC_KEY`
 in the deploy matches the application's Public Key, and redeploy.
+
+**On AWS: every interaction gets rejected, and the logs show nothing wrong.**
+Requests are refused if their timestamp is more than five minutes from the function's
+clock, which stops a captured request being replayed. Lambda's clock is managed by AWS,
+so in practice this only fires on a genuine replay — but it is what to suspect if signed
+requests are being rejected and the public key is definitely right.
 
 **`Cannot find module ... /src/config.js`**
 You ran a file in `src/` directly. Always use `npm start` and `npm run register`, which

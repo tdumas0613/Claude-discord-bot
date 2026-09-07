@@ -52,6 +52,44 @@ describe('BotStack', () => {
     });
   });
 
+  it('caps what the public endpoint can spend', () => {
+    // The URL is unauthenticated, so anyone who finds it can make us run code.
+    synth().hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: Match.objectLike({ DISCORD_PUBLIC_KEY: 'ab'.repeat(32) }) },
+      ReservedConcurrentExecutions: 20,
+    });
+  });
+
+  it('caps how many model calls can run at once', () => {
+    // Not lower: a throttled async event retried past the interaction token's
+    // 15-minute life leaves the placeholder on screen forever.
+    synth().hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: Match.objectLike({ ANTHROPIC_SECRET_ID: 'test/anthropic-key' }) },
+      ReservedConcurrentExecutions: 10,
+    });
+  });
+
+  it('sends worker invocations that exhaust their retries to a queue', () => {
+    const template = synth();
+
+    template.resourceCountIs('AWS::SQS::Queue', 1);
+    template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+      DestinationConfig: {
+        OnFailure: { Destination: Match.objectLike({ 'Fn::GetAtt': Match.anyValue() }) },
+      },
+    });
+  });
+
+  it('lets the worker write to its failure queue', () => {
+    synth().hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({ Action: Match.arrayWith(['sqs:SendMessage']), Effect: 'Allow' }),
+        ]),
+      },
+    });
+  });
+
   it('exposes the responder over an unauthenticated Function URL', () => {
     // Discord signs with Ed25519 and cannot produce SigV4, so AWS_IAM is not
     // an option; `responder/signature.ts` is what actually guards this URL.
@@ -110,7 +148,11 @@ describe('BotStack', () => {
 
   it('publishes the endpoint to paste into the Developer Portal', () => {
     expect(Object.keys(synth().findOutputs('*'))).toEqual(
-      expect.arrayContaining(['InteractionsEndpointUrl', 'WorkerFunctionName']),
+      expect.arrayContaining([
+        'InteractionsEndpointUrl',
+        'WorkerFunctionName',
+        'WorkerFailureQueueUrl',
+      ]),
     );
   });
 });

@@ -1,9 +1,11 @@
 import * as path from 'node:path';
 import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import { FunctionUrlAuthType, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { SqsDestination } from 'aws-cdk-lib/aws-lambda-destinations';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
+import { Queue } from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 
 /** Repository root, from `infra/lib/` — where the Lambda sources live. */
@@ -49,11 +51,28 @@ export class BotStack extends Stack {
       props.anthropicSecretName,
     );
 
+    // Where an invocation lands if it fails through Lambda's own retries —
+    // Discord's API being down at follow-up time, say. Without it the event is
+    // dropped and the user's "thinking…" hangs with nothing recorded. Nothing
+    // reads this queue automatically: check it when a reply never arrives.
+    const workerFailures = new Queue(this, 'WorkerFailures', {
+      retentionPeriod: Duration.days(14),
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
     const worker = new NodejsFunction(this, 'Worker', {
       ...sharedFunctionProps('worker'),
       // Generous because the ceiling costs nothing — Lambda bills the
       // milliseconds actually used, and a model call is the slow part.
       timeout: Duration.seconds(60),
+      // The function that spends real money: every invocation is a model call.
+      // Do not lower this casually. The worker is invoked asynchronously and
+      // Lambda retries throttled events with backoff, but the interaction
+      // token expires 15 minutes after the original interaction — an event
+      // throttled past that produces a follow-up Discord rejects, leaving the
+      // placeholder on screen forever.
+      reservedConcurrentExecutions: 10,
+      onFailure: new SqsDestination(workerFailures),
       environment: {
         ANTHROPIC_SECRET_ID: anthropicSecret.secretName,
       },
@@ -71,6 +90,11 @@ export class BotStack extends Stack {
       // asynchronous invoke; anything slower has already missed Discord's
       // deadline, and a timeout says so in the logs instead of hiding it.
       timeout: Duration.seconds(5),
+      // This URL is public and unauthenticated, so anyone who finds it can
+      // make us run code — a bad signature is rejected, but the invocation is
+      // still billed. At ~200ms each this is roughly 100 requests/second, far
+      // past what a hobby bot sees, and it bounds what a flood can cost.
+      reservedConcurrentExecutions: 20,
       environment: {
         DISCORD_PUBLIC_KEY: props.discordPublicKey,
         DISCORD_CLIENT_ID: props.discordClientId,
@@ -93,6 +117,11 @@ export class BotStack extends Stack {
     new CfnOutput(this, 'InteractionsEndpointUrl', {
       value: url.url,
       description: 'Discord Developer Portal > General Information > Interactions Endpoint URL',
+    });
+
+    new CfnOutput(this, 'WorkerFailureQueueUrl', {
+      value: workerFailures.queueUrl,
+      description: 'Dead-letter queue: worker invocations that failed through every retry',
     });
 
     new CfnOutput(this, 'WorkerFunctionName', {

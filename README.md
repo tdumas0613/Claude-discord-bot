@@ -207,10 +207,31 @@ Discord's three seconds, so it reads `commands/names.ts` — a list of names tha
 nothing — instead of the registry, which would drag in `discord.js` and the Anthropic
 SDK behind it. That one import is worth about 1.5 MB.
 
-The Function URL is unauthenticated because it has to be: Discord signs each request
-with the application's Ed25519 key and cannot produce SigV4. `responder/signature.ts` is
-what guards it, and Discord probes the endpoint with deliberately invalid signatures
-before it will accept the URL.
+That Function URL *is* the endpoint Discord posts to — an AWS-managed HTTPS address on
+`*.lambda-url.<region>.on.aws`, which is all Discord asks for. There is no API Gateway,
+load balancer, or custom domain in front of it, and adding one would only cost money and
+add something else to debug.
+
+It is unauthenticated because it has to be: Discord signs each request with the
+application's Ed25519 key and cannot produce SigV4. `responder/signature.ts` is what
+guards it, and Discord probes the endpoint with deliberately invalid signatures before it
+will accept the URL. Verification also rejects anything whose timestamp is more than five
+minutes off, so a captured request cannot be replayed indefinitely — every replay would
+otherwise be a real model call on your bill.
+
+Two more things keep an unattended deployment cheap and quiet:
+
+- **Reserved concurrency** — 20 on the responder, 10 on the worker. Free, and it bounds
+  what a flood of junk aimed at a public URL can cost. The worker's cap is the one that
+  matters, since each of its invocations is a model call.
+- **A dead-letter queue** on the worker, printed as `WorkerFailureQueueUrl`. If an
+  invocation fails through every automatic retry, the event lands there instead of
+  vanishing. Nothing polls it — it is where to look when a reply never arrives.
+
+Running this costs nothing at hobby volume except Secrets Manager, which is about
+$0.40/month. Lambda's free tier (1M requests and 400,000 GB-seconds monthly) does not
+expire after a year, Function URLs carry no charge of their own, and the log groups and
+queue sit inside their free allowances.
 
 Before the first deploy, put the Anthropic key in Secrets Manager — CDK references the
 secret rather than creating it, so the value never appears in a template or in
