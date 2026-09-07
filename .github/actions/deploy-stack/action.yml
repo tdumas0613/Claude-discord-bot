@@ -53,6 +53,34 @@ runs:
       shell: bash
       run: npm ci --prefix infra
 
+    # TEMPORARY — remove once OIDC is working. Prints the claims AWS will be
+    # asked to match against the role's trust policy, so a mismatch can be read
+    # off directly instead of guessed at. Prints the decoded claims only; the
+    # token itself is never echoed.
+    - name: Show OIDC claims (temporary debug)
+      shell: bash
+      env:
+        ROLE_ARN: ${{ inputs.role-to-assume }}
+      run: |
+        set -euo pipefail
+
+        echo "role-to-assume resolved to: '${ROLE_ARN}'"
+
+        response=$(curl -sS           -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"           "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+
+        RESPONSE="$response" node -e '
+          const token = JSON.parse(process.env.RESPONSE).value;
+          const claims = JSON.parse(
+            Buffer.from(token.split(".")[1], "base64url").toString(),
+          );
+          const { sub, aud, repository, repository_owner, environment, ref } = claims;
+          console.log(JSON.stringify(
+            { sub, aud, repository, repository_owner, environment, ref },
+            null,
+            2,
+          ));
+        '
+
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
