@@ -223,10 +223,41 @@ Two more things keep an unattended deployment cheap and quiet:
 
 - **Reserved concurrency** — 20 on the responder, 10 on the worker. Free, and it bounds
   what a flood of junk aimed at a public URL can cost. The worker's cap is the one that
-  matters, since each of its invocations is a model call.
+  matters, since each of its invocations is a model call. See below if a deploy rejects
+  it.
 - **A dead-letter queue** on the worker, printed as `WorkerFailureQueueUrl`. If an
   invocation fails through every automatic retry, the event lands there instead of
   vanishing. Nothing polls it — it is where to look when a reply never arrives.
+
+#### When the account cannot reserve concurrency
+
+AWS refuses a reservation that would push the account's *unreserved* capacity below its
+floor, so on an account with a low concurrency limit the deploy fails outright:
+
+```
+Specified ReservedConcurrentExecutions for function decreases account's
+UnreservedConcurrentExecution below its minimum value of [10]
+```
+
+New AWS accounts often start at a limit of 10 rather than the usual 1,000, and at that
+limit **no reservation of any size is possible** — lowering the numbers does not help.
+Check where you stand with:
+
+```bash
+aws lambda get-account-settings --region us-east-2 --query 'AccountLimit.ConcurrentExecutions'
+```
+
+The fix is a quota increase: Service Quotas → Lambda → **Concurrent executions**
+(`L-B99A9384`), which is free and usually granted quickly. To deploy while that is
+pending, turn the reservations off:
+
+```bash
+RESERVE_CONCURRENCY=false npm run deploy --prefix infra
+```
+
+Treat that as temporary. With it off the public URL has no ceiling on what a flood can
+cost and the worker has no cap on parallel model calls — which is the whole reason the
+caps are the default. Redeploy without the flag once the quota is raised.
 
 Running this costs nothing at hobby volume except Secrets Manager, which is about
 $0.40/month per environment — so $0.80 with dev and prod both deployed. Lambda's free tier (1M requests and 400,000 GB-seconds monthly) does not

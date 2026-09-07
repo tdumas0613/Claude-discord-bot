@@ -11,12 +11,13 @@ import { BotStack } from '../lib/bot-stack';
  * Bundling is stubbed: esbuild runs on real synth, and these tests should not
  * pay for it. `aws:cdk:bundling-stacks` set to nothing matches no stack.
  */
-function synth() {
+function synth({ reserveConcurrency = true } = {}) {
   const app = new App({ context: { 'aws:cdk:bundling-stacks': [] } });
   const stack = new BotStack(app, 'TestStack', {
     discordClientId: '123456789',
     discordPublicKey: 'ab'.repeat(32),
     anthropicSecretName: 'test/anthropic-key',
+    reserveConcurrency,
   });
   return Template.fromStack(stack);
 }
@@ -88,6 +89,21 @@ describe('BotStack', () => {
         ]),
       },
     });
+  });
+
+  it('can omit the caps for an account that cannot reserve any', () => {
+    // An account whose concurrency limit is low rejects *any* reservation:
+    // it would push unreserved capacity below the account's floor and the
+    // deploy fails outright. Without this escape hatch such an account
+    // cannot deploy the stack at all.
+    const functions = Object.values(
+      synth({ reserveConcurrency: false }).findResources('AWS::Lambda::Function'),
+    ) as Array<{ Properties: Record<string, unknown> }>;
+
+    expect(functions).toHaveLength(2);
+    for (const fn of functions) {
+      expect(fn.Properties).not.toHaveProperty('ReservedConcurrentExecutions');
+    }
   });
 
   it('exposes the responder over an unauthenticated Function URL', () => {

@@ -42,6 +42,10 @@ new BotStack(app, optional('STACK_NAME', 'ClaudeDiscordRoastBot'), {
   discordClientId: required('DISCORD_CLIENT_ID'),
   discordPublicKey: required('DISCORD_PUBLIC_KEY'),
   anthropicSecretName: optional('ANTHROPIC_SECRET_NAME', 'claude-discord-roast-bot/anthropic-api-key'),
+  // Opt-out, not opt-in: the guard is the default and turning it off has to be
+  // a deliberate act. Only an account whose Lambda concurrency limit is too low
+  // to reserve any should need this.
+  reserveConcurrency: optional('RESERVE_CONCURRENCY', 'true').toLowerCase() !== 'false',
   env: {
     // The account comes from whichever credentials are in use, and stays
     // undefined without them so `cdk synth` still works in CI. The region does

@@ -51,6 +51,8 @@ jobs:
           discord-client-id: ${{ vars.DISCORD_CLIENT_ID }}
           discord-public-key: ${{ vars.DISCORD_PUBLIC_KEY }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Unset means the caps stay on, which is what you want.
+          reserve-concurrency: ${{ vars.RESERVE_CONCURRENCY || 'true' }}
 
   deploy-prod:
     name: Deploy prod
@@ -85,3 +87,5 @@ jobs:
           discord-client-id: ${{ vars.DISCORD_CLIENT_ID }}
           discord-public-key: ${{ vars.DISCORD_PUBLIC_KEY }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Unset means the caps stay on, which is what you want.
+          reserve-concurrency: ${{ vars.RESERVE_CONCURRENCY || 'true' }}

@@ -29,6 +29,14 @@ inputs:
   anthropic-api-key:
     description: The Anthropic API key to place in Secrets Manager.
     required: true
+  reserve-concurrency:
+    description: >-
+      Set to "false" only on an AWS account whose concurrency limit is too low
+      to reserve any. Omitting the caps leaves the public URL without a ceiling
+      on what a flood can cost, so this is a stopgap while a quota increase is
+      pending.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -93,6 +101,7 @@ runs:
       env:
         STACK_NAME: ${{ inputs.stack-name }}
         ANTHROPIC_SECRET_NAME: ${{ inputs.secret-name }}
+        RESERVE_CONCURRENCY: ${{ inputs.reserve-concurrency }}
         DISCORD_CLIENT_ID: ${{ inputs.discord-client-id }}
         DISCORD_PUBLIC_KEY: ${{ inputs.discord-public-key }}
       run: |

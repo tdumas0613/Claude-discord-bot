@@ -291,7 +291,20 @@ aws iam create-open-id-connect-provider \
 
 **4. Create the deploy role.** The trust policy is scoped to the two environments rather
 than to a branch — the pipeline runs from any branch, but only ever from these two
-environments, and GitHub puts that in the token's `sub` claim:
+environments, and GitHub puts that in the token's `sub` claim.
+
+**Check the exact subject your repository emits first.** Most guides show
+`repo:<owner>/<repo>:environment:dev`, but GitHub may instead send an immutable form with
+the numeric owner and repository IDs appended — `repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:dev`
+— and a policy written the other way silently never matches. The IDs are worth having
+either way: they survive a rename, where a name can be released and re-registered by
+someone else. Read yours:
+
+```bash
+gh api repos/<owner>/<repo> --jq '"repo:\(.owner.login)@\(.owner.id)/\(.name)@\(.id):environment:dev"'
+```
+
+Substitute what that prints into the two `sub` values below:
 
 ```bash
 cat > trust.json <<'JSON'
@@ -442,19 +455,31 @@ clock, which stops a captured request being replayed. Lambda's clock is managed 
 so in practice this only fires on a genuine replay — but it is what to suspect if signed
 requests are being rejected and the public key is definitely right.
 
-**The pipeline fails at "Configure AWS credentials".**
-The OIDC trust policy does not match. It is scoped to
-`repo:<owner>/<repo>:environment:dev` and `:environment:prod`, so check the repository
-name matches exactly, and that `AWS_DEPLOY_ROLE_ARN` points at the role you created.
+**The pipeline fails at "Configure AWS credentials" with `Not authorized to perform sts:AssumeRoleWithWebIdentity`.**
+The token reached AWS and was refused by the role's trust policy — so this is never a
+missing `id-token: write`, and never a permissions problem on the role itself.
+
+Check the `sub` condition against what your repository actually sends. It may be the
+immutable `repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:dev` form rather than the
+plain names (see step 4). The `repository` and `environment` claims look correct in both
+cases, so the policy reads as fine while never matching. Also confirm
+`AWS_DEPLOY_ROLE_ARN` points at the role you created — matching is case-sensitive
+throughout.
 
 **The pipeline deployed prod without asking.**
 The `prod` environment has no required reviewer. Settings → Environments → prod →
 Required reviewers.
 
 **A deploy fails on minimum unreserved concurrency.**
-Each stack reserves 30 concurrent executions, so both together reserve 60, and AWS
-requires 100 to stay unreserved. On an account with a low limit, deploy only one
-environment or raise the quota — see the note in Part 5.
+AWS refuses any reservation that pushes the account's unreserved capacity below its
+floor. New accounts often have a limit of 10 rather than 1,000, and at that limit no
+reservation of any size succeeds — lowering the numbers will not help. Check with
+`aws lambda get-account-settings --region us-east-2 --query 'AccountLimit.ConcurrentExecutions'`.
+
+Request an increase under Service Quotas → Lambda → **Concurrent executions**
+(`L-B99A9384`). To deploy while waiting, set the repository variable
+`RESERVE_CONCURRENCY` to `false`, which omits the caps. Remove it once the quota is
+raised — with the caps off, the public URL has no ceiling on what a flood can cost.
 
 **`/roast` works in prod but the dev stack seems dead.**
 Expected. Both environments share one Discord application, and an application has exactly

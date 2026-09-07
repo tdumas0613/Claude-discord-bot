@@ -28,6 +28,20 @@ export interface BotStackProps extends StackProps {
    * and out of `cdk diff` output.
    */
   readonly anthropicSecretName: string;
+  /**
+   * Whether to reserve concurrency on the two functions.
+   *
+   * On by default, and it should stay on: it is what bounds the cost of a
+   * public unauthenticated URL, and of a worker whose every invocation is a
+   * model call. The switch exists because an AWS account with a low
+   * concurrency limit cannot reserve *any* — reserving would push unreserved
+   * capacity below the account's floor and the deploy fails outright — so
+   * without it such an account cannot deploy this stack at all.
+   *
+   * Turning it off is a temporary measure while a quota increase is pending,
+   * not a way to avoid thinking about the ceiling.
+   */
+  readonly reserveConcurrency: boolean;
 }
 
 /**
@@ -71,7 +85,7 @@ export class BotStack extends Stack {
       // token expires 15 minutes after the original interaction — an event
       // throttled past that produces a follow-up Discord rejects, leaving the
       // placeholder on screen forever.
-      reservedConcurrentExecutions: 10,
+      reservedConcurrentExecutions: props.reserveConcurrency ? 10 : undefined,
       onFailure: new SqsDestination(workerFailures),
       environment: {
         ANTHROPIC_SECRET_ID: anthropicSecret.secretName,
@@ -94,7 +108,7 @@ export class BotStack extends Stack {
       // make us run code — a bad signature is rejected, but the invocation is
       // still billed. At ~200ms each this is roughly 100 requests/second, far
       // past what a hobby bot sees, and it bounds what a flood can cost.
-      reservedConcurrentExecutions: 20,
+      reservedConcurrentExecutions: props.reserveConcurrency ? 20 : undefined,
       environment: {
         DISCORD_PUBLIC_KEY: props.discordPublicKey,
         DISCORD_CLIENT_ID: props.discordClientId,

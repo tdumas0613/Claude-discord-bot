@@ -157,9 +157,12 @@ Without it, bundling silently falls back to Docker.
 - The worker has an SQS `onFailure` destination for invocations that fail through every
   retry. Nothing polls it; it is a place to look, surfaced as `WorkerFailureQueueUrl`.
 
-A deploy may fail on minimum unreserved concurrency if the account's limit is low — AWS
-requires 100 to stay unreserved. Lower the reservations or raise the quota; do not remove
-them.
+A deploy may fail on minimum unreserved concurrency if the account's limit is low. AWS
+refuses any reservation that pushes unreserved capacity below the account's floor, and on
+a low-limit account (new accounts often start at 10, not 1,000) **no reservation of any
+size is possible** — lowering the numbers does not help. `RESERVE_CONCURRENCY=false`
+omits both caps so such an account can deploy at all; it is a stopgap while a Service
+Quotas increase is pending, not the intended configuration. Do not delete the caps.
 
 `test/bot-stack.test.ts` asserts properties, not a snapshot: a snapshot would break on
 every CDK upgrade without telling us anything. It stubs bundling with the
@@ -196,9 +199,22 @@ so they are written once rather than per environment. Two things there are load-
   deploying. A stack whose secret is missing deploys perfectly green and fails only at
   runtime, as a reply that never arrives.
 
-Authentication is OIDC — no AWS keys in GitHub. The role's trust policy is scoped to
-`repo:<owner>/<repo>:environment:dev|prod`, which works precisely because both deploy
-jobs declare an `environment:`. Keep that, or the role stops trusting the pipeline.
+Authentication is OIDC — no AWS keys in GitHub. The role's trust policy matches the
+token's `sub`, which works precisely because both deploy jobs declare an `environment:`.
+Keep that, or the role stops trusting the pipeline.
+
+**The subject is not the plain `repo:<owner>/<repo>:environment:dev` every guide shows.**
+This repository emits GitHub's immutable form, with the numeric owner and repository IDs
+appended:
+
+```
+repo:<owner>@<owner-id>/<repo>@<repo-id>:environment:dev
+```
+
+A policy written the documented way never matches, and the failure —
+`Not authorized to perform sts:AssumeRoleWithWebIdentity` — looks identical to a dozen
+other causes, because the `repository` and `environment` claims are exactly what you
+expect. Read the real `sub` before writing the policy rather than assuming a format.
 
 `ci.yml` carries `workflow_call:` so the pipeline can reuse it. Its concurrency group
 includes `github.workflow` because in a called run that resolves to the *caller's* name —
