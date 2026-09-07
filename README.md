@@ -307,6 +307,19 @@ Both environments share one Discord application, so only prod's Function URL is
 registered as the interactions endpoint; dev is reached by sending it signed requests
 directly. `SETUP.md` Part 6 covers the one-time OIDC and repository setup.
 
+### Exercising a deployment
+
+`bruno/discord-roast-bot/` is a [Bruno](https://www.usebruno.com/) collection that posts
+signed interactions straight at a deployed responder — the PING handshake Discord uses to
+verify an endpoint, a full `/roast`, and the two rejections that matter (an invalid
+signature and a replayed timestamp).
+
+One wrinkle is worth knowing before you try: Discord holds the private key, so you cannot
+sign as the real application. Deploy **dev** with a public key you generated instead, by
+setting `DISCORD_PUBLIC_KEY` as a *dev environment* variable in GitHub — environment
+variables override repository ones, so prod keeps trusting Discord. The collection's
+README has the keypair command and the rest of the setup.
+
 ## The Claude API call
 
 The request uses `claude-opus-5` at low effort — a one-liner needs no deep reasoning, and

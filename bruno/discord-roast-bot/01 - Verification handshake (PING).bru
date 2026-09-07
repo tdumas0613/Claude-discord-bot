@@ -1,0 +1,33 @@
+meta {
+  name: 01 - Verification handshake (PING)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+}
+
+body:json {
+  {"type":1}
+}
+
+assert {
+  res.status: eq 200
+  res.body.type: eq 1
+}
+
+docs {
+  The exchange Discord performs before it will save an Interactions Endpoint
+  URL: a signed type-1 PING, which must come back as a type-1 PONG.
+  
+  If this passes, the endpoint is live and signature verification agrees with
+  the public key the stack was deployed with. If it returns 401, the deployed
+  DISCORD_PUBLIC_KEY does not match the testPrivateKeyHex in this environment.
+}

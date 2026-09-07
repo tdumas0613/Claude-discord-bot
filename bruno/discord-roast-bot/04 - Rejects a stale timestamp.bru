@@ -1,0 +1,38 @@
+meta {
+  name: 04 - Rejects a stale timestamp
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}
+  body: json
+  auth: none
+}
+
+headers {
+  content-type: application/json
+  x-test-backdate-seconds: 400
+}
+
+body:json {
+  {"type":1}
+}
+
+assert {
+  res.status: eq 401
+}
+
+docs {
+  A genuinely valid signature over a timestamp outside the replay window, which
+  `signature.ts` caps at ±300 seconds. The backdating is driven by the
+  x-test-backdate-seconds header, which the collection script reads; the
+  responder ignores headers it does not know.
+  
+  This is the difference between "signed by Discord" and "signed by Discord
+  just now". Without the window a captured request replays forever, and every
+  replay is a real model call on the bill.
+  
+  Needs testPrivateKeyHex set — unsigned, it would 401 for the wrong reason.
+  Change the header to 60 and it should return 200 instead.
+}
