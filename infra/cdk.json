@@ -1,0 +1,11 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "watch": {
+    "include": ["bin/**", "lib/**", "../src/**"],
+    "exclude": ["**/node_modules/**", "**/*.test.ts"]
+  },
+  "context": {
+    "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
+    "@aws-cdk/aws-lambda:useCdkManagedLogGroup": true
+  }
+}

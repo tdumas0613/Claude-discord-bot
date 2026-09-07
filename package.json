@@ -21,11 +21,14 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
+    "@aws-sdk/client-lambda": "^3.1127.0",
+    "@aws-sdk/client-secrets-manager": "^3.1127.0",
     "discord.js": "^14.27.0",
     "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "esbuild": "^0.25.12",
     "jest": "^30.5.1",
     "ts-jest": "^29.4.12",
     "typescript": "^6.0.3"

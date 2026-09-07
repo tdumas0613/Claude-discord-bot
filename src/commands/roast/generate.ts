@@ -1,8 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_API_KEY } from '../../config.js';
+import { requireEnv } from '../../config.js';
 import { SYSTEM_PROMPT } from './prompt.js';
 
-const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+let client: Anthropic | undefined;
+
+/**
+ * Built on first use rather than at import: in Lambda a missing key must
+ * surface as a handled failure, not a crash while loading the module. The
+ * instance is cached so warm invocations reuse the same connection pool.
+ */
+function getClient(): Anthropic {
+  client ??= new Anthropic({ apiKey: requireEnv('ANTHROPIC_API_KEY') });
+  return client;
+}
 
 const MODEL = 'claude-opus-5';
 
@@ -72,7 +82,7 @@ export async function generateRoast(displayName: string): Promise<string> {
 
   let response;
   try {
-    response = await client.beta.messages.create({
+    response = await getClient().beta.messages.create({
       model: MODEL,
       max_tokens: 4000,
       // Roasts are short and the model declines a fraction of them; server-side

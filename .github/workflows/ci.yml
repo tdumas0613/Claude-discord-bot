@@ -3,13 +3,19 @@ name: CI
 on:
   push:
   pull_request:
+  # Deployment Pipeline calls this before it deploys anything, so the checks
+  # live in one place rather than being restated there.
+  workflow_call:
 
 permissions:
   contents: read
 
-# A newer push to the same branch makes an in-flight run obsolete.
+# A newer push to the same branch makes an in-flight run obsolete. The workflow
+# name is part of the group because in a called run `github.workflow` is the
+# *caller's* name — without it, a deploy and a push on the same branch would
+# share a group and cancel each other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,6 +49,59 @@ jobs:
 
       - name: Run unit tests
         run: npm test -- --ci
+
+  # The CDK app is a separate package with its own dependencies, so it gets its
+  # own install. `cdk synth` is the real test of the stack: it runs esbuild over
+  # the Lambda entrypoints, which is where a broken import surfaces.
+  infra:
+    name: Infrastructure (CDK)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Bundling resolves the bot's dependencies from the repository root, so
+      # both trees have to be installed.
+      - name: Install bot dependencies
+        run: npm ci
+
+      - name: Install infrastructure dependencies
+        run: npm ci --prefix infra
+
+      - name: Type-check the stack
+        run: npm run typecheck --prefix infra
+
+      - name: Test the stack
+        run: npm test --prefix infra -- --ci
+
+      # Placeholder values: synth only needs them to be present and well formed.
+      - name: Synthesize the stack
+        run: npm run synth --prefix infra
+        env:
+          DISCORD_CLIENT_ID: '000000000000000000'
+          DISCORD_PUBLIC_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+
+      # The region is pinned in bin/app.ts rather than taken from ambient
+      # credentials, because a region that resolves to the wrong place is
+      # silent — it deploys a whole second bot nobody is looking at.
+      - name: Check the stack is pinned to us-east-2
+        run: |
+          region=$(node -e "
+            const m = require('./infra/cdk.out/manifest.json');
+            const stack = Object.values(m.artifacts).find(a => a.type === 'aws:cloudformation:stack');
+            console.log(stack.environment.split('/').pop());
+          ")
+          if [ "$region" != "us-east-2" ]; then
+            echo "Stack synthesized for '$region', expected us-east-2." >&2
+            exit 1
+          fi
 
   # Software Composition Analysis: what's wrong with the dependencies we pull in.
   # Static analysis of our own code lives in codeql.yml.

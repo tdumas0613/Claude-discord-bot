@@ -1,4 +1,3 @@
-import type { Interaction } from 'discord.js';
 import type { BotCommand } from './types.js';
 import { roast } from './roast/index.js';
 
@@ -13,19 +12,7 @@ const registry: ReadonlyMap<string, BotCommand> = new Map([[roast.definition.nam
 /** The payloads `npm run register` sends to Discord. */
 export const commands = [...registry.values()].map((command) => command.definition);
 
-/**
- * Routes an interaction to the command that owns it. Anything that is not a
- * known chat input command is ignored.
- */
-export async function handleInteraction(interaction: Interaction): Promise<void> {
-  if (!interaction.isChatInputCommand()) {
-    return;
-  }
-
-  const command = registry.get(interaction.commandName);
-  if (!command) {
-    return;
-  }
-
-  await command.execute(interaction);
+/** The command with this name, or undefined if we do not handle it. */
+export function findCommand(name: string): BotCommand | undefined {
+  return registry.get(name);
 }

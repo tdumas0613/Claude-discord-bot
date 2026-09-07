@@ -122,44 +122,159 @@ Everything below is for people reading or changing the code.
 
 ## How a roast happens
 
-`bot/index.ts` logs in and hands every interaction to the registry in `commands/index.ts`,
-which matches the command name and calls that command's `execute`. For `/roast` that is
-`commands/roast/handler.ts`: it works out which name to use and defers the reply — Discord
-wants an acknowledgement within three seconds, and the API call takes longer — then calls
-`commands/roast/generate.ts` and posts whatever comes back.
+The command logic does not know how it was invoked. A *transport* turns whatever arrived
+into a `CommandRequest` — resolving which display name to roast — and turns the returned
+`CommandReply` back into something Discord understands. There are two:
+
+- **Gateway** (`bot/`), for local development: holds a WebSocket, defers the reply, and
+  edits it once the roast is ready. This is what `npm start` runs.
+- **HTTP interactions** (`lambda/`), for AWS: Discord posts to a Function URL. Because
+  the reply is due within three seconds and a roast takes longer, one function verifies
+  the signature and acknowledges, and a second does the work and edits the reply
+  afterwards using the interaction token.
 
 ```
 src/
-  bot/
+  bot/                          the Discord gateway transport (local development)
     index.ts                    entrypoint: creates the client, logs in
+    gateway.ts                  discord.js interaction -> command -> reply
     register-slash-commands.ts  entrypoint: npm run register
-  commands/
-    index.ts                    registry + router: name -> command
-    types.ts                    the BotCommand shape each command exports
-    roast/
-      index.ts                  the command as the registry sees it
-      command.ts                slash command definition
-      handler.ts                runs /roast, formats replies
-      generate.ts               the Claude API call
-      prompt.ts                 the system prompt
+  lambda/                       the HTTP-interactions transport (AWS)
+    interaction.ts              raw Discord JSON -> command request
+    events.ts                   the WorkerEvent contract between the two
+    responder/                  invocation 1: answers within three seconds
+      index.ts                  entrypoint: reads config, builds the handler
+      handler.ts                verify signature, PONG, defer, hand off
+      signature.ts              Ed25519 verification, no dependencies
+      dispatch.ts               asynchronous invoke of the worker
+    worker/                     invocation 2: does the slow part
+      index.ts                  entrypoint
+      handler.ts                run the command, edit the deferred reply
+      discord-api.ts            the follow-up PATCH
+      secrets.ts                the Anthropic key, from Secrets Manager
+  commands/                     transport-agnostic command logic
+    index.ts                    registry: name -> command
+    names.ts                    just the names, for the responder
+    types.ts                    CommandRequest / CommandReply / BotCommand
+    roast/                      index · command · handler · generate · prompt
   config.ts                     environment variables
+infra/                          the CDK app that deploys the two functions
+  bin/app.ts                    reads config, instantiates the stack
+  lib/bot-stack.ts              the functions, the URL, the permissions
 ```
 
 Adding a second command is: a new folder under `commands/`, exporting a `BotCommand`
-from its `index.ts`, plus one line in `commands/index.ts`. Nothing else changes.
+from its `index.ts`, plus one line in `commands/index.ts` and one in `commands/names.ts`.
+A test fails if you forget the second.
 
-`src/bot/` holds the two entrypoints — they act on import (logging in, calling Discord's
-REST API), which is exactly why everything else lives outside them and can be imported by a
-test without touching the network. Worth preserving.
+Entrypoints act on import — logging in, calling Discord's REST API, reading AWS config —
+which is why everything else lives outside them and can be imported by a test without
+touching the network. Worth preserving.
 
 The Anthropic SDK is imported in exactly one file, `commands/roast/generate.ts`. It
 translates SDK exceptions into a `RoastUnavailableError` carrying a `reason`, so the
 Discord-facing code never sees a vendor type.
 
-Picking the name to roast is fiddlier than it looks: Discord may hand back either a full
-`GuildMember` with a `displayName` getter, or a raw resolved member carrying `nick`.
-`resolveDisplayName` handles both, then falls back to the global display name and finally
-the username.
+Picking the name to roast is fiddlier than it looks, and each transport does it from a
+different shape: the gateway from discord.js objects (which come as either a `GuildMember`
+with a `displayName` getter or a raw resolved member carrying `nick`), Lambda from the raw
+`resolved` JSON. Both apply the same precedence — nickname, global display name, username.
+
+## Deploying to AWS
+
+`infra/` is a CDK app — a separate npm package, so `aws-cdk-lib` never lands in the
+bot's dependency tree or its Lambda bundles.
+
+```bash
+cd infra
+npm install
+npm test                    # asserts the stack's shape, no AWS account needed
+npm run synth               # bundles both functions with esbuild
+npm run deploy
+```
+
+Two functions come out of it, each bundled from its own entrypoint:
+
+| | Responder | Worker |
+|---|---|---|
+| Entrypoint | `src/lambda/responder/index.ts` | `src/lambda/worker/index.ts` |
+| Trigger | Function URL, unauthenticated | asynchronous invoke, from the responder |
+| Timeout | 5s | 60s |
+| Bundle | ~0.5 MB | ~1.9 MB |
+
+The responder's bundle is the small one on purpose. It has to cold-start inside
+Discord's three seconds, so it reads `commands/names.ts` — a list of names that imports
+nothing — instead of the registry, which would drag in `discord.js` and the Anthropic
+SDK behind it. That one import is worth about 1.5 MB.
+
+That Function URL *is* the endpoint Discord posts to — an AWS-managed HTTPS address on
+`*.lambda-url.<region>.on.aws`, which is all Discord asks for. There is no API Gateway,
+load balancer, or custom domain in front of it, and adding one would only cost money and
+add something else to debug.
+
+It is unauthenticated because it has to be: Discord signs each request with the
+application's Ed25519 key and cannot produce SigV4. `responder/signature.ts` is what
+guards it, and Discord probes the endpoint with deliberately invalid signatures before it
+will accept the URL. Verification also rejects anything whose timestamp is more than five
+minutes off, so a captured request cannot be replayed indefinitely — every replay would
+otherwise be a real model call on your bill.
+
+Two more things keep an unattended deployment cheap and quiet:
+
+- **Reserved concurrency** — 20 on the responder, 10 on the worker. Free, and it bounds
+  what a flood of junk aimed at a public URL can cost. The worker's cap is the one that
+  matters, since each of its invocations is a model call.
+- **A dead-letter queue** on the worker, printed as `WorkerFailureQueueUrl`. If an
+  invocation fails through every automatic retry, the event lands there instead of
+  vanishing. Nothing polls it — it is where to look when a reply never arrives.
+
+Running this costs nothing at hobby volume except Secrets Manager, which is about
+$0.40/month per environment — so $0.80 with dev and prod both deployed. Lambda's free tier (1M requests and 400,000 GB-seconds monthly) does not
+expire after a year, Function URLs carry no charge of their own, and the log groups and
+queue sit inside their free allowances.
+
+Before the first deploy, put the Anthropic key in Secrets Manager — CDK references the
+secret rather than creating it, so the value never appears in a template or in
+`cdk diff`:
+
+```bash
+aws secretsmanager create-secret \
+  --name claude-discord-roast-bot/anthropic-api-key \
+  --secret-string 'sk-ant-...'
+```
+
+Then deploy with the application's public identifiers, and paste the
+`InteractionsEndpointUrl` output into Developer Portal → General Information →
+Interactions Endpoint URL. Discord verifies the endpoint at that moment, so the stack
+has to be deployed first.
+
+```bash
+DISCORD_CLIENT_ID=... DISCORD_PUBLIC_KEY=... npm run deploy --prefix infra
+```
+
+Neither of those is a secret — the client ID is public, and the public key exists to be
+published — which is why they are plain environment variables and the API key is not.
+
+Everything lands in **us-east-2**, pinned in `infra/bin/app.ts` rather than taken from
+whatever region your credentials happen to resolve to. A region that resolves wrongly is
+silent: you get a second complete bot in another region, with its own URL that Discord
+knows nothing about. Override deliberately with `REGION=eu-west-1` if you ever need to.
+
+### The Deployment Pipeline
+
+`.github/workflows/deploy.yml` does the above from CI instead, for two environments.
+It is manual — Actions → Deployment Pipeline → Run workflow, from any branch — and runs
+the CI checks once, deploys `ClaudeDiscordRoastBot-dev`, then waits for a human to
+approve before deploying `ClaudeDiscordRoastBot-prod`.
+
+It authenticates with OIDC, so no AWS keys are stored in GitHub, and it copies each
+environment's `ANTHROPIC_API_KEY` secret into that environment's Secrets Manager secret
+before deploying — the worker reads from Secrets Manager, but GitHub is where the value
+is kept.
+
+Both environments share one Discord application, so only prod's Function URL is
+registered as the interactions endpoint; dev is reached by sending it signed requests
+directly. `SETUP.md` Part 6 covers the one-time OIDC and repository setup.
 
 ## The Claude API call
 
@@ -222,6 +337,10 @@ Discord's REST API on import. Everything else is at 100%.
 request, against Node 24. It also runs dependency scanning (SCA) in a parallel job:
 `npm audit` over the whole installed tree, plus `dependency-review-action` on pull requests
 to review what the PR adds. Both fail the build at high severity or above.
+
+A third job installs `infra/`, type-checks it, runs the stack's tests, and synthesizes
+it. Synth is the part that matters: it runs esbuild over both Lambda entrypoints, so a
+broken import fails CI rather than a deploy.
 
 `.github/workflows/codeql.yml` runs CodeQL (SAST) over the TypeScript and over the workflow
 files themselves — on pushes to `main`, on every pull request, and weekly on a schedule so

@@ -17,8 +17,16 @@ const config: Config = {
   },
   testMatch: ['**/tests/**/*.test.ts'],
   clearMocks: true,
-  // src/bot/* are entrypoints that log in or call Discord on import.
-  collectCoverageFrom: ['src/**/*.ts', '!src/bot/**'],
+  // Excluded: entrypoints and thin vendor wiring. src/bot/* log in or call
+  // Discord on import; each Lambda's index.ts is its deployed entrypoint —
+  // the responder's wires env vars to the handler, the worker's re-exports it;
+  // dispatch is a five-line AWS SDK call. Everything else is covered.
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/bot/**',
+    '!src/lambda/*/index.ts',
+    '!src/lambda/responder/dispatch.ts',
+  ],
 };
 
 export default config;

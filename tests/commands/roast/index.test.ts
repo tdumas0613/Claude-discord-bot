@@ -10,15 +10,15 @@ jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
 }));
 
 jest.unstable_mockModule('../../../src/config.js', () => ({
-  ANTHROPIC_API_KEY: 'test-anthropic-key',
-  DISCORD_TOKEN: 'test-discord-token',
-  DISCORD_CLIENT_ID: null,
-  DISCORD_GUILD_ID: null,
+  requireEnv: (name: string) => `test-${name}`,
+  optionalEnv: () => null,
+  failFast: (read: () => unknown) => read(),
+  MissingConfigError: class extends Error {},
 }));
 
 const { roast } = await import('../../../src/commands/roast/index.js');
 const { roastCommand } = await import('../../../src/commands/roast/command.js');
-const { execute } = await import('../../../src/commands/roast/handler.js');
+const { run } = await import('../../../src/commands/roast/handler.js');
 
 /**
  * The façade the registry consumes. Nothing else should need to know how the
@@ -30,7 +30,7 @@ describe('roast command export', () => {
     expect(roast.definition.name).toBe('roast');
   });
 
-  it('wires the handler as its executor', () => {
-    expect(roast.execute).toBe(execute);
+  it('wires the handler as its runner', () => {
+    expect(roast.run).toBe(run);
   });
 });

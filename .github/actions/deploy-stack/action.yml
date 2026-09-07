@@ -1,0 +1,126 @@
+name: Deploy a bot stack
+description: >-
+  Deploys one environment's CDK stack to AWS and syncs its Anthropic API key
+  into Secrets Manager. Used by both jobs in the Deployment Pipeline so the
+  steps are written once.
+
+inputs:
+  environment:
+    description: Environment name, used in the run summary. dev or prod.
+    required: true
+  stack-name:
+    description: CloudFormation stack name, e.g. ClaudeDiscordRoastBot-dev.
+    required: true
+  secret-name:
+    description: Secrets Manager secret holding this environment's Anthropic key.
+    required: true
+  role-to-assume:
+    description: ARN of the IAM role GitHub assumes via OIDC.
+    required: true
+  aws-region:
+    description: Region to deploy into. The stack also pins this in bin/app.ts.
+    required: true
+  discord-client-id:
+    description: Discord application ID. Public.
+    required: true
+  discord-public-key:
+    description: Discord application public key, hex. Public by design.
+    required: true
+  anthropic-api-key:
+    description: The Anthropic API key to place in Secrets Manager.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check out the repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: .nvmrc
+        cache: npm
+
+    # Both trees. CDK bundles the Lambdas by running `npx --no-install esbuild`
+    # with the repository root as its working directory, so the root install is
+    # not redundant — without it, bundling silently falls back to Docker.
+    - name: Install bot dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Install infrastructure dependencies
+      shell: bash
+      run: npm ci --prefix infra
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+
+    # The worker reads its key from Secrets Manager, but the key lives in a
+    # GitHub environment secret — this is the bridge between the two. It runs
+    # before the deploy because a stack whose secret is missing deploys green
+    # and only fails at runtime, as a reply that never arrives.
+    - name: Sync the Anthropic key into Secrets Manager
+      shell: bash
+      env:
+        SECRET_NAME: ${{ inputs.secret-name }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        set -euo pipefail
+        # Passed through the environment, never on a command line, and output
+        # is discarded because the API responses echo the secret's metadata.
+        if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" >/dev/null 2>&1; then
+          aws secretsmanager put-secret-value \
+            --secret-id "$SECRET_NAME" \
+            --secret-string "$ANTHROPIC_API_KEY" >/dev/null
+          echo "Updated $SECRET_NAME."
+        else
+          aws secretsmanager create-secret \
+            --name "$SECRET_NAME" \
+            --description "Anthropic API key for the Discord /roast bot (${{ inputs.environment }})" \
+            --secret-string "$ANTHROPIC_API_KEY" >/dev/null
+          echo "Created $SECRET_NAME."
+        fi
+
+    # `npm run deploy` is a bare `cdk deploy`, so the unattended flags go after
+    # `--`. Without --require-approval never it would block forever on this
+    # stack's IAM changes.
+    - name: Deploy ${{ inputs.stack-name }}
+      shell: bash
+      env:
+        STACK_NAME: ${{ inputs.stack-name }}
+        ANTHROPIC_SECRET_NAME: ${{ inputs.secret-name }}
+        DISCORD_CLIENT_ID: ${{ inputs.discord-client-id }}
+        DISCORD_PUBLIC_KEY: ${{ inputs.discord-public-key }}
+      run: |
+        npm run deploy --prefix infra -- \
+          --require-approval never \
+          --outputs-file cdk-outputs.json
+
+    # The interactions endpoint is the reason anyone reads this run: prod's
+    # goes in the Developer Portal, dev's is what you point a test client at.
+    - name: Report the stack outputs
+      shell: bash
+      if: always()
+      run: |
+        set -euo pipefail
+        file=infra/cdk-outputs.json
+        if [ ! -f "$file" ]; then
+          echo "No outputs file — the deploy did not complete." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        {
+          echo "## ${{ inputs.environment }} — ${{ inputs.stack-name }}"
+          echo
+          echo "| Output | Value |"
+          echo "| --- | --- |"
+          node -e "
+            const outputs = require('./$file')['${{ inputs.stack-name }}'] ?? {};
+            for (const [key, value] of Object.entries(outputs)) {
+              console.log(\`| \${key} | \\\`\${value}\\\` |\`);
+            }
+          "
+        } >> "$GITHUB_STEP_SUMMARY"

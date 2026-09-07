@@ -1,51 +1,30 @@
-import type {
-  APIInteractionDataResolvedGuildMember,
-  ChatInputCommandInteraction,
-  GuildMember,
-  User,
-} from 'discord.js';
+import type { CommandReply, CommandRequest } from '../types.js';
 import { generateRoast, RoastRefusedError, RoastUnavailableError } from './generate.js';
 
-/** What `ChatInputCommandInteraction#options.getMember` can hand back. */
-type ResolvedMember = GuildMember | APIInteractionDataResolvedGuildMember | null;
-
 /**
- * Picks the name to roast: the per-server nickname when there is one, then the
- * global display name, then the username. Nothing else about the user is ever
- * used — the model gets no real information about anyone.
+ * Runs `/roast`. The registry has already matched the command name, and the
+ * transport has already resolved the target's display name, so this only deals
+ * with the roast itself.
  *
- * A member resolved from the raw API payload carries `nick` rather than the
- * `displayName` getter, so both shapes are handled here.
+ * Never throws: every failure becomes a reply, because whichever transport
+ * called us has a waiting user to answer.
  */
-export function resolveDisplayName(user: User, member: ResolvedMember): string {
-  const nickname =
-    member === null ? null : 'displayName' in member ? member.displayName : member.nick;
-
-  return nickname ?? user.displayName ?? user.username;
-}
-
-/**
- * Runs `/roast`. The registry has already matched the command name, so this
- * only deals with the roast itself.
- */
-export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-  const target = interaction.options.getUser('user', true);
-  const displayName = resolveDisplayName(target, interaction.options.getMember('user'));
-
-  // The API call takes a few seconds; Discord expects a reply within 3.
-  await interaction.deferReply();
+export async function run(request: CommandRequest): Promise<CommandReply> {
+  const target = request.getUser('user');
+  if (!target) {
+    // Discord enforces the option as required, so reaching here means the
+    // payload was malformed rather than the user omitting an argument.
+    return { content: 'I could not tell who you wanted roasted.', mentions: [] };
+  }
 
   try {
-    const roast = await generateRoast(displayName);
-    await interaction.editReply({
-      content: `${target} ${roast}`,
-      allowedMentions: { users: [target.id] },
-    });
+    const roast = await generateRoast(target.displayName);
+    return { content: `<@${target.id}> ${roast}`, mentions: [target.id] };
   } catch (error) {
-    await interaction.editReply(errorMessage(error));
     if (!(error instanceof RoastRefusedError)) {
       console.error('Failed to generate roast:', error);
     }
+    return { content: errorMessage(error), mentions: [] };
   }
 }
 

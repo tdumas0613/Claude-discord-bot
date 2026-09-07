@@ -13,7 +13,8 @@ roast of a server member. Small on purpose: no database, no web server.
 npm run typecheck                    # tsc over src/ AND tests/ (tsconfig.json)
 npm run build                        # emit src/ -> dist/ (tsconfig.build.json)
 npm test                             # full Jest suite
-npm test -- tests/commands/roast     # one folder
+npm test -- tests/lambda             # one folder
+npm test --prefix infra              # CDK stack tests (separate package)
 npm test -- -t "enables server-side" # one test by name
 npm run test:coverage                # coverage (currently 100% on covered modules)
 npm start                            # builds first via prestart, runs dist/bot/index.js
@@ -30,31 +31,178 @@ to propagate). Re-run it whenever a command definition changes.
 
 ## Architecture
 
-Organized by feature, not by vendor. `src/bot/` holds the two entrypoints; `src/commands/`
-holds one folder per slash command; `src/config.ts` sits underneath everything.
+Organized by feature, not by vendor, and by transport at the edges. `src/commands/`
+holds one folder per slash command and knows nothing about how an interaction arrived;
+`src/bot/` is the Discord gateway transport; `src/lambda/` is the HTTP-interactions
+transport; `src/config.ts` sits underneath everything.
 
-Flow: `bot/index.ts` (client + login) → `commands/index.ts` (registry + router) →
-`commands/roast/handler.ts` (replies) → `commands/roast/generate.ts` (API call).
+```
+bot/index.ts  ─┐                                    ┌─ commands/index.ts (registry)
+bot/gateway.ts ┼─▶ CommandRequest ─▶ BotCommand.run ┤
+lambda/*       ─┘                                   └─ commands/roast/*
+```
 
-Each command folder exports a single `BotCommand` (`commands/types.ts`) from its
-`index.ts`: a `definition` to register and an `execute` to run. `commands/index.ts` holds
-the name→command map, derives the registration payload from it, and routes interactions.
-Adding a command is a new folder plus one entry in that map — do not add command-specific
-branching to the router.
+**The seam is `CommandRequest` / `CommandReply` (`commands/types.ts`).** A transport
+resolves the target's display name — the gateway from discord.js objects, Lambda from
+raw `resolved.members` / `resolved.users` JSON — and hands over a plain object. A command
+returns content plus the user IDs it may ping. `run` never throws: it turns failures into
+a reply, because every transport has a waiting user to answer. Do not reintroduce
+discord.js types into `commands/`; that dependency is what made Lambda impossible.
 
-Everything outside `src/bot/` is importable without side effects. The entrypoints act on
-import (login, REST call), which is why they hold no logic and are excluded from coverage.
+Adding a command is a new folder under `commands/` exporting a `BotCommand` from its
+`index.ts`, plus one entry in the registry map **and** one in `commands/names.ts`. Do not
+add command-specific branching to a transport.
+
+`commands/names.ts` is a duplicate of the registry's keys on purpose. The responder
+Lambda needs to know whether a name is ours, and importing the registry to ask would pull
+`discord.js` (via `roast/command.ts`) and the Anthropic SDK (via `roast/generate.ts`)
+into the bundle with three seconds to cold-start — about 1.5 MB of it. Keep that module
+import-free. `tests/commands/names.test.ts` fails if the two disagree.
+
+### The Lambda pair
+
+Discord closes an interaction if the HTTP response takes over 3 seconds, and a roast
+takes longer, so acknowledgement and work happen in two invocations:
+
+- `lambda/responder/handler.ts` — verifies the Ed25519 signature, answers PING with
+  PONG, invokes the worker asynchronously, then returns a type-5 deferral. Dispatch
+  happens *before* deferring so a failed hand-off can still be reported to the user.
+- `lambda/worker/handler.ts` — runs the command and PATCHes the result into the deferred
+  reply. **Every path must end in a follow-up**: Discord never times the "thinking…"
+  placeholder out, so a worker that dies quietly leaves it on screen permanently.
+
+One folder per deployed function, with what only that function needs inside it:
+`responder/` owns signature verification and dispatch, `worker/` owns the follow-up
+call. What both need stays flat in `lambda/` — `interaction.ts`, and `events.ts` for
+the `WorkerEvent` contract the responder writes and the worker reads. A file that
+would have to be imported across the two folders belongs at the top level instead.
+
+Each folder's `index.ts` is its deployed entrypoint, so the CDK stack points at
+`dist/lambda/responder/index.handler` and `dist/lambda/worker/index.handler`. Keep that
+shape when adding a function: entrypoint in `index.ts`, testable logic beside it.
+
+`lambda/responder/signature.ts` uses `node:crypto` only — no dependency. Discord probes the
+endpoint with deliberately invalid signatures and will not register a URL that accepts
+them, so verify against the *raw* body: parsing and re-serializing changes the bytes and
+breaks the signature.
+
+It also enforces a ±`MAX_TIMESTAMP_SKEW_SECONDS` (300s) freshness window. A signature
+proves a request came from Discord, not that it came from Discord *now*, and a captured
+request would otherwise replay forever — each replay a model call on our bill, through a
+signature we cannot revoke without rotating the application key. Because of that window,
+tests must build timestamps relative to `Date.now()`; a hardcoded one ages out and starts
+failing on its own. `tests/lambda/responder/endpoint.test.ts` drives the real
+`isValidRequest` through a Function-URL-shaped request and is the closest thing to
+Discord's own registration probe — the rest of the responder tests mock verification.
+
+`lambda/worker/secrets.ts` resolves `ANTHROPIC_API_KEY` from Secrets Manager into
+`process.env` before the command runs, because `commands/roast/generate.ts` reads it from
+there and must not learn about AWS. It is called from inside `worker/handler.ts`'s try
+block, not from `worker/index.ts`: an unreadable secret has to reach the user as a
+message like any other failure. An `ANTHROPIC_API_KEY` already in the environment always
+wins, so local runs and tests never reach for AWS.
+
+`lambda/worker/discord-api.ts` is the follow-up call. It is the same route discord.js reaches
+through `interaction.editReply` (`InteractionWebhook` → `/webhooks/{app}/{token}
+/messages/@original`), authorized by the interaction token, valid 15 minutes. No bot
+token is involved.
+
+Everything outside `src/bot/`, the two `lambda/*/index.ts` entrypoints and
+`lambda/responder/dispatch.ts` is importable without side effects; those are entrypoints
+or vendor wiring and are excluded from coverage.
 
 The Anthropic SDK is imported in exactly ONE file: `commands/roast/generate.ts`. It
-translates SDK exceptions into `RoastUnavailableError` with a `reason`; the Discord layer
-branches on that reason. Do not import `@anthropic-ai/sdk` anywhere else — that boundary is
-the point, and `tests/anthropic-contract.test.ts` guards the class hierarchy it relies on.
+translates SDK exceptions into `RoastUnavailableError` with a `reason`; transports branch
+on that reason. Do not import `@anthropic-ai/sdk` anywhere else — that boundary is the
+point, and `tests/anthropic-contract.test.ts` guards the class hierarchy it relies on.
 
-`config.ts` calls `process.exit(1)` at import time when a required variable is missing.
-Anything importing it transitively (which is nearly everything) will kill the process
-without `DISCORD_TOKEN` and `ANTHROPIC_API_KEY` set. Tests mock `src/config.js` (at whatever relative depth) rather
-than setting env vars, except `tests/config.test.ts`, which mocks `dotenv/config` and spies
-on `process.exit` so a developer's local `.env` cannot influence the result.
+`config.ts` exports `requireEnv` (throws `MissingConfigError`), `optionalEnv`, and
+`failFast` for CLI entrypoints. It must **not** `process.exit` at import: in Lambda that
+turns a fixable configuration mistake into a container crash. `generate.ts` builds its
+Anthropic client lazily for the same reason.
+
+## Infrastructure
+
+`infra/` is a CDK app in its own npm package, with its own `package.json`, lock file and
+`node_modules`. That is deliberate: `aws-cdk-lib` stays out of the bot's dependency tree,
+out of its Lambda bundles, and out of what the SCA job audits. It is also CommonJS, unlike
+the bot — the CDK default, and what `cdk.json`'s ts-node invocation expects.
+
+```bash
+npm ci --prefix infra
+npm test --prefix infra          # stack assertions; no AWS account needed
+npm run synth --prefix infra     # the real check: runs esbuild over both entrypoints
+```
+
+`esbuild` is a devDependency of the **root** package, not just `infra/`. CDK runs
+`npx --no-install esbuild` with `projectRoot` as the working directory, and projectRoot is
+the repository root because that is where the Lambda sources and their dependencies are.
+Without it, bundling silently falls back to Docker.
+
+`lib/bot-stack.ts` holds both functions. Things there that are load-bearing:
+
+- Both entrypoints are `src/lambda/*/index.ts`. Bundling per entry is what keeps the
+  responder small — check with `npm run synth --prefix infra` and look at the reported
+  sizes; the responder should stay well under a megabyte.
+- The Function URL is `FunctionUrlAuthType.NONE` and must stay that way. Discord signs
+  with Ed25519 and cannot produce SigV4, so `responder/signature.ts` is the only guard.
+- The Anthropic secret is *referenced*, never created (`Secret.fromSecretNameV2`), so the
+  key stays out of the template and out of `cdk diff`.
+- `externalModules: []` bundles the AWS SDK rather than trusting the runtime's copy.
+- **Reserved concurrency**: 20 responder, 10 worker. It is what bounds the cost of a
+  public unauthenticated URL. Do not lower the worker's casually — it is invoked
+  asynchronously and Lambda retries throttled events with backoff, but the interaction
+  token dies 15 minutes after the interaction, and an event throttled past that produces
+  a follow-up Discord rejects, leaving the placeholder on screen forever.
+- The worker has an SQS `onFailure` destination for invocations that fail through every
+  retry. Nothing polls it; it is a place to look, surfaced as `WorkerFailureQueueUrl`.
+
+A deploy may fail on minimum unreserved concurrency if the account's limit is low — AWS
+requires 100 to stay unreserved. Lower the reservations or raise the quota; do not remove
+them.
+
+`test/bot-stack.test.ts` asserts properties, not a snapshot: a snapshot would break on
+every CDK upgrade without telling us anything. It stubs bundling with the
+`aws:cdk:bundling-stacks: []` context so the tests do not run esbuild.
+
+**The region is pinned to `us-east-2` in `bin/app.ts`, not read from
+`CDK_DEFAULT_REGION`.** That variable is whatever the CDK CLI resolved from ambient
+credentials, and with no region configured it quietly becomes us-east-1 — which deploys a
+complete second bot, with its own Function URL, that Discord never calls and nobody looks
+at. Override explicitly with `-c REGION=…` or `REGION=…`. The `infra` CI job asserts the
+synthesized manifest says us-east-2, so removing the pin fails the build.
+
+The account is still ambient (`CDK_DEFAULT_ACCOUNT`), and stays undefined without
+credentials so `cdk synth` works in CI. A partially specified environment is valid CDK.
+
+### Deployment
+
+`.github/workflows/deploy.yml` ("Deployment Pipeline") is `workflow_dispatch` only,
+runnable from any branch. It calls `ci.yml` once, deploys dev, then deploys prod — which
+pauses for a human because the job declares `environment: prod` and that environment has
+a required reviewer. CI is deliberately *not* re-run before prod: same commit, and dev
+deploying already proved the build.
+
+Two stacks in one account, `ClaudeDiscordRoastBot-dev` and `-prod`, told apart by
+`STACK_NAME` and `ANTHROPIC_SECRET_NAME`. Both share one Discord application, so only
+prod's Function URL is registered as the interactions endpoint.
+
+The deploy steps live in a composite action, `.github/actions/deploy-stack/action.yml`,
+so they are written once rather than per environment. Two things there are load-bearing:
+
+- It runs `npm ci` at the **root** as well as in `infra/`. The root install is what
+  provides esbuild, per the note above.
+- It upserts the environment's `ANTHROPIC_API_KEY` into Secrets Manager *before*
+  deploying. A stack whose secret is missing deploys perfectly green and fails only at
+  runtime, as a reply that never arrives.
+
+Authentication is OIDC — no AWS keys in GitHub. The role's trust policy is scoped to
+`repo:<owner>/<repo>:environment:dev|prod`, which works precisely because both deploy
+jobs declare an `environment:`. Keep that, or the role stops trusting the pipeline.
+
+`ci.yml` carries `workflow_call:` so the pipeline can reuse it. Its concurrency group
+includes `github.workflow` because in a called run that resolves to the *caller's* name —
+without it, a deploy and a push on the same branch share a group and cancel each other.
 
 ## The Claude API call
 
@@ -96,10 +244,12 @@ module under test is loaded, which means the module under test is pulled in with
 `await import('../src/x.js')`, never a static import. Copy the shape from an existing test
 file rather than inventing a new one.
 
-`getMember()` can return either a `GuildMember` (with a `displayName` getter) or a raw
-`APIInteractionDataResolvedGuildMember` (with `nick`). `resolveDisplayName` in
-`commands/roast/handler.ts` handles both; it uses an `in` check rather than `instanceof`
-so plain object fixtures work in tests.
+Display-name resolution lives in each transport and must stay consistent between them:
+nickname, then global display name, then username. `bot/gateway.ts` handles discord.js's
+two member shapes (`GuildMember` with a `displayName` getter, or a raw
+`APIInteractionDataResolvedGuildMember` with `nick`) using an `in` check rather than
+`instanceof`, so plain object fixtures work in tests. `lambda/interaction.ts` does the
+same job from the raw JSON maps.
 
 ## CI
 

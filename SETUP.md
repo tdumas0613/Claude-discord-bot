@@ -159,6 +159,236 @@ After a few seconds the bot replies with a roast, mentioning the person.
 
 ---
 
+## Part 5 — Deploy to AWS (optional)
+
+Parts 1–4 keep a process running on your machine. This part moves the bot to Lambda, so
+it runs only when someone uses it and there is nothing to keep alive.
+
+You need the AWS CLI signed in (`aws login`) and an account that has been bootstrapped
+for CDK — `cd infra && npm ci && npx cdk bootstrap aws://<account-id>/us-east-2`, once
+per account and region. The install comes first because the CDK CLI is a dependency of
+`infra/`, and without an active sign-in CDK fails with
+`no credentials have been configured`.
+
+**1. Put the Anthropic key in Secrets Manager.**
+
+The deployed worker reads the key from there rather than from an environment variable, so
+it never appears in a CloudFormation template or in the Lambda console.
+
+```bash
+aws secretsmanager create-secret \
+  --name claude-discord-roast-bot/anthropic-api-key \
+  --secret-string 'sk-ant-...'
+```
+
+**2. Install and deploy.**
+
+`infra/` is a separate npm package, so it needs its own install.
+
+```bash
+npm ci --prefix infra
+DISCORD_CLIENT_ID=... DISCORD_PUBLIC_KEY=... npm run deploy --prefix infra
+```
+
+Both values are on the Developer Portal's General Information page — the same ones from
+Part 1. Neither is a secret.
+
+If the deploy fails complaining about **minimum unreserved concurrency**, the account's
+concurrent-execution limit is lower than the stack's reservations assume — new AWS
+accounts often start well below the usual 1,000, and AWS requires at least 100 to stay
+unreserved. Either lower `reservedConcurrentExecutions` in `infra/lib/bot-stack.ts` (20
+for the responder, 10 for the worker) or request a limit increase in the Service Quotas
+console.
+
+**3. Point Discord at it.**
+
+The deploy prints an `InteractionsEndpointUrl`. Paste it into Developer Portal → your app
+→ General Information → **Interactions Endpoint URL**, and save.
+
+Discord immediately sends a request with a deliberately invalid signature and refuses the
+URL unless it is rejected. Saving successfully means signature verification works.
+
+**4. Register the command, if you haven't.**
+
+Slash commands are registered against the application, not the host, so if you already
+ran `npm run register` in Part 3 there is nothing to do. Otherwise run it now.
+
+Once the endpoint URL is set, Discord stops using the gateway connection for slash
+commands — you do not need `npm start` running any more.
+
+---
+
+## Part 6 — Deploy from GitHub Actions (optional)
+
+Part 5 deploys one stack from your laptop. This replaces that with a **Deployment
+Pipeline** workflow that deploys two stacks — `dev` then `prod` — into **us-east-2**,
+authenticating with short-lived OIDC credentials rather than stored AWS keys.
+
+The pipeline is manual: run it from the Actions tab on whatever branch you like. It runs
+the CI checks once, deploys dev, then waits for a human before prod.
+
+Both stacks live in the same AWS account, told apart by stack name and secret path:
+
+| | dev | prod |
+|---|---|---|
+| Stack | `ClaudeDiscordRoastBot-dev` | `ClaudeDiscordRoastBot-prod` |
+| Secret | `claude-discord-roast-bot/dev/anthropic-api-key` | `…/prod/…` |
+
+Both use the **same Discord application**, so only one of the two Function URLs can be
+registered as the Interactions Endpoint — prod's. The dev stack is reached by sending it
+signed requests directly, not through Discord.
+
+### One-time AWS setup
+
+**1. Sign in to AWS.** Every command in this section needs credentials, and a sign-in
+expires — so do this first, and again whenever you come back to it:
+
+```bash
+aws login
+aws sts get-caller-identity   # should print the account you are about to bootstrap
+```
+
+Skipping this is the usual cause of
+`Need to perform AWS calls for account ..., but no credentials have been configured`.
+That error means the credential chain found *nothing* — it is not a permissions problem,
+and an expired sign-in looks exactly the same as never having signed in.
+
+**2. Bootstrap CDK** for the account and region, if you have not already. Install
+`infra/`'s dependencies first — the pinned CDK CLI lives in that package, so without the
+install `npx` downloads a different version from the registry, and running from the
+repository root does the same:
+
+```bash
+cd infra
+npm ci
+npx cdk bootstrap aws://<account-id>/us-east-2 \
+  -c DISCORD_CLIENT_ID=<application-id> \
+  -c DISCORD_PUBLIC_KEY=<public-key>
+cd ..
+```
+
+Bootstrapping does not use those two values — it only creates the `CDKToolkit` stack —
+but it does need them present. Because there is a `cdk.json` in this directory, the CDK
+CLI executes the app to look for any further environments to bootstrap, and `bin/app.ts`
+refuses to build a stack without them. Passing them with `-c` satisfies that; any value
+would get you past it, but the real ones are what you want everywhere else.
+
+Both are on the Developer Portal's **General Information** page: the **Application ID**
+and, just below it, the 64-character hex **Public Key**. Neither is a secret — the public
+key exists so that anyone can verify Discord's signatures — and neither is the bot token.
+
+The `cd ..` matters: the steps below write temporary policy files into the current
+directory, and they do not belong inside `infra/`.
+
+**3. Register GitHub as an OIDC identity provider.** This is what lets a workflow prove
+which repository it is running in, so no AWS keys need to exist in GitHub at all:
+
+```bash
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+```
+
+**4. Create the deploy role.** The trust policy is scoped to the two environments rather
+than to a branch — the pipeline runs from any branch, but only ever from these two
+environments, and GitHub puts that in the token's `sub` claim:
+
+```bash
+cat > trust.json <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": [
+          "repo:tdumas0613/Claude-discord-bot:environment:dev",
+          "repo:tdumas0613/Claude-discord-bot:environment:prod"
+        ]
+      }
+    }
+  }]
+}
+JSON
+
+aws iam create-role \
+  --role-name GitHubActionsDeploy \
+  --assume-role-policy-document file://trust.json
+```
+
+**5. Give it only what it needs.** Not `AdministratorAccess`: CDK's bootstrap already
+created roles that hold the deploy permissions, so this role only needs to assume those,
+plus Secrets Manager for the API key sync.
+
+```bash
+cat > policy.json <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::<account-id>:role/cdk-hnb659fds-*-<account-id>-us-east-2"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:us-east-2:<account-id>:secret:claude-discord-roast-bot/*"
+    }
+  ]
+}
+JSON
+
+aws iam put-role-policy \
+  --role-name GitHubActionsDeploy \
+  --policy-name DeployBotStacks \
+  --policy-document file://policy.json
+```
+
+Note the role ARN it prints — the next step needs it.
+
+### One-time GitHub setup
+
+Under **Settings → Secrets and variables → Actions**, add three *variables* (not
+secrets — a client ID and a public key are public by design, and a role ARN is not
+sensitive):
+
+| Variable | Value |
+|---|---|
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::<account-id>:role/GitHubActionsDeploy` |
+| `DISCORD_CLIENT_ID` | Application ID, from General Information |
+| `DISCORD_PUBLIC_KEY` | Public Key, from General Information |
+
+Under **Settings → Environments**, in each of `dev` and `prod`, add a secret named
+`ANTHROPIC_API_KEY`. The pipeline copies each environment's value into that
+environment's Secrets Manager secret before deploying.
+
+Then, on the **`prod` environment only**, add yourself under **Required reviewers**.
+**This is what makes prod wait for you.** Without it the pipeline still works, it simply
+runs prod straight after dev with no pause.
+
+### Running it
+
+Actions → **Deployment Pipeline** → Run workflow, pick a branch, run.
+
+Checks run once, dev deploys, and the run then stops at "Review deployments" until you
+approve prod. Each deploy prints its stack outputs — including the interactions endpoint
+URL — to the run summary.
+
+Only prod's URL goes in the Developer Portal. The first prod deploy needs that pasted in
+per Part 5, step 3; after that the URL is stable and redeploys do not change it.
+
+---
+
 ## Troubleshooting
 
 **`/roast` doesn't appear in the command menu.**
@@ -191,6 +421,45 @@ probably not running — check the terminal from Part 3, step 4.
 
 **The bot replies "My Claude API key is not working."**
 `ANTHROPIC_API_KEY` is wrong or has no credit. Check it in the Anthropic console.
+
+**On AWS: the reply stays "thinking…" forever.**
+The responder deferred but the worker never edited the reply. Two places to look, in
+order: the worker's log group in CloudWatch, and the dead-letter queue the deploy prints
+as `WorkerFailureQueueUrl`. Anything in that queue is an invocation that failed through
+every automatic retry — the message carries the original event and the error. Nothing
+polls it for you.
+
+A worker that could not read the secret shows up as a "Something went wrong" reply
+rather than a hang, so a genuine hang usually means the follow-up itself failed.
+
+**On AWS: Discord won't save the Interactions Endpoint URL.**
+The responder is not returning 401 for a bad signature. Check that `DISCORD_PUBLIC_KEY`
+in the deploy matches the application's Public Key, and redeploy.
+
+**On AWS: every interaction gets rejected, and the logs show nothing wrong.**
+Requests are refused if their timestamp is more than five minutes from the function's
+clock, which stops a captured request being replayed. Lambda's clock is managed by AWS,
+so in practice this only fires on a genuine replay — but it is what to suspect if signed
+requests are being rejected and the public key is definitely right.
+
+**The pipeline fails at "Configure AWS credentials".**
+The OIDC trust policy does not match. It is scoped to
+`repo:<owner>/<repo>:environment:dev` and `:environment:prod`, so check the repository
+name matches exactly, and that `AWS_DEPLOY_ROLE_ARN` points at the role you created.
+
+**The pipeline deployed prod without asking.**
+The `prod` environment has no required reviewer. Settings → Environments → prod →
+Required reviewers.
+
+**A deploy fails on minimum unreserved concurrency.**
+Each stack reserves 30 concurrent executions, so both together reserve 60, and AWS
+requires 100 to stay unreserved. On an account with a low limit, deploy only one
+environment or raise the quota — see the note in Part 5.
+
+**`/roast` works in prod but the dev stack seems dead.**
+Expected. Both environments share one Discord application, and an application has exactly
+one Interactions Endpoint URL, which points at prod. Reach dev by sending signed requests
+to its own Function URL, printed in the pipeline's run summary.
 
 **`Cannot find module ... /src/config.js`**
 You ran a file in `src/` directly. Always use `npm start` and `npm run register`, which

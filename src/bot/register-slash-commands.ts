@@ -1,9 +1,11 @@
 import { DiscordAPIError, REST, Routes } from 'discord.js';
 import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
 import { commands } from '../commands/index.js';
-import { DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DISCORD_TOKEN } from '../config.js';
+import { failFast, optionalEnv, requireEnv } from '../config.js';
 
-const clientId = DISCORD_CLIENT_ID;
+const DISCORD_TOKEN = failFast(() => requireEnv('DISCORD_TOKEN'));
+const DISCORD_GUILD_ID = optionalEnv('DISCORD_GUILD_ID');
+const clientId = optionalEnv('DISCORD_CLIENT_ID');
 if (!clientId) {
   console.error(
     'Missing DISCORD_CLIENT_ID. Add your application ID to .env before deploying commands.',
