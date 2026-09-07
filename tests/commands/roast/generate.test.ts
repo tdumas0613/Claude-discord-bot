@@ -56,10 +56,10 @@ jest.unstable_mockModule('@anthropic-ai/sdk', () => ({
 
 // Stub config so the tests never touch a real .env file or exit the process.
 jest.unstable_mockModule('../../../src/config.js', () => ({
-  ANTHROPIC_API_KEY: 'test-anthropic-key',
-  DISCORD_TOKEN: 'test-discord-token',
-  DISCORD_CLIENT_ID: null,
-  DISCORD_GUILD_ID: null,
+  requireEnv: (name: string) => `test-${name}`,
+  optionalEnv: () => null,
+  failFast: (read: () => unknown) => read(),
+  MissingConfigError: class extends Error {},
 }));
 
 const { generateRoast, RoastRefusedError } = await import('../../../src/commands/roast/generate.js');
@@ -87,8 +87,13 @@ beforeEach(() => {
 });
 
 describe('generateRoast request', () => {
-  it('passes the configured API key to the client', () => {
-    expect(constructorOptions[0]).toEqual({ apiKey: 'test-anthropic-key' });
+  it('builds the client lazily, with the configured API key', async () => {
+    // Constructed on first use rather than at import, so Lambda cold starts do
+    // not fail while loading the module when the key is absent.
+    create.mockResolvedValue(response());
+    await generateRoast('Bartholomew');
+
+    expect(constructorOptions[0]).toEqual({ apiKey: 'test-ANTHROPIC_API_KEY' });
   });
 
   it('calls the Messages API with the expected model and options', async () => {

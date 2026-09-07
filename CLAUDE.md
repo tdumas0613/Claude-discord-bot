@@ -13,7 +13,7 @@ roast of a server member. Small on purpose: no database, no web server.
 npm run typecheck                    # tsc over src/ AND tests/ (tsconfig.json)
 npm run build                        # emit src/ -> dist/ (tsconfig.build.json)
 npm test                             # full Jest suite
-npm test -- tests/commands/roast     # one folder
+npm test -- tests/lambda             # one folder
 npm test -- -t "enables server-side" # one test by name
 npm run test:coverage                # coverage (currently 100% on covered modules)
 npm start                            # builds first via prestart, runs dist/bot/index.js
@@ -30,31 +30,63 @@ to propagate). Re-run it whenever a command definition changes.
 
 ## Architecture
 
-Organized by feature, not by vendor. `src/bot/` holds the two entrypoints; `src/commands/`
-holds one folder per slash command; `src/config.ts` sits underneath everything.
+Organized by feature, not by vendor, and by transport at the edges. `src/commands/`
+holds one folder per slash command and knows nothing about how an interaction arrived;
+`src/bot/` is the Discord gateway transport; `src/lambda/` is the HTTP-interactions
+transport; `src/config.ts` sits underneath everything.
 
-Flow: `bot/index.ts` (client + login) → `commands/index.ts` (registry + router) →
-`commands/roast/handler.ts` (replies) → `commands/roast/generate.ts` (API call).
+```
+bot/index.ts  ─┐                                    ┌─ commands/index.ts (registry)
+bot/gateway.ts ┼─▶ CommandRequest ─▶ BotCommand.run ┤
+lambda/*       ─┘                                   └─ commands/roast/*
+```
 
-Each command folder exports a single `BotCommand` (`commands/types.ts`) from its
-`index.ts`: a `definition` to register and an `execute` to run. `commands/index.ts` holds
-the name→command map, derives the registration payload from it, and routes interactions.
-Adding a command is a new folder plus one entry in that map — do not add command-specific
-branching to the router.
+**The seam is `CommandRequest` / `CommandReply` (`commands/types.ts`).** A transport
+resolves the target's display name — the gateway from discord.js objects, Lambda from
+raw `resolved.members` / `resolved.users` JSON — and hands over a plain object. A command
+returns content plus the user IDs it may ping. `run` never throws: it turns failures into
+a reply, because every transport has a waiting user to answer. Do not reintroduce
+discord.js types into `commands/`; that dependency is what made Lambda impossible.
 
-Everything outside `src/bot/` is importable without side effects. The entrypoints act on
-import (login, REST call), which is why they hold no logic and are excluded from coverage.
+Adding a command is a new folder under `commands/` exporting a `BotCommand` from its
+`index.ts`, plus one entry in the registry map. Do not add command-specific branching
+to a transport.
+
+### The Lambda pair
+
+Discord closes an interaction if the HTTP response takes over 3 seconds, and a roast
+takes longer, so acknowledgement and work happen in two invocations:
+
+- `lambda/responder.ts` — verifies the Ed25519 signature, answers PING with PONG,
+  invokes the worker asynchronously, then returns a type-5 deferral. Dispatch happens
+  *before* deferring so a failed hand-off can still be reported to the user.
+- `lambda/worker.ts` — runs the command and PATCHes the result into the deferred reply.
+  **Every path must end in a follow-up**: Discord never times the "thinking…"
+  placeholder out, so a worker that dies quietly leaves it on screen permanently.
+
+`lambda/signature.ts` uses `node:crypto` only — no dependency. Discord probes the
+endpoint with deliberately invalid signatures and will not register a URL that accepts
+them, so verify against the *raw* body: parsing and re-serializing changes the bytes and
+breaks the signature.
+
+`lambda/discord-api.ts` is the follow-up call. It is the same route discord.js reaches
+through `interaction.editReply` (`InteractionWebhook` → `/webhooks/{app}/{token}
+/messages/@original`), authorized by the interaction token, valid 15 minutes. No bot
+token is involved.
+
+Everything outside `src/bot/`, `lambda/responder-entry.ts` and `lambda/dispatch.ts` is
+importable without side effects; those three are entrypoints or vendor wiring and are
+excluded from coverage.
 
 The Anthropic SDK is imported in exactly ONE file: `commands/roast/generate.ts`. It
-translates SDK exceptions into `RoastUnavailableError` with a `reason`; the Discord layer
-branches on that reason. Do not import `@anthropic-ai/sdk` anywhere else — that boundary is
-the point, and `tests/anthropic-contract.test.ts` guards the class hierarchy it relies on.
+translates SDK exceptions into `RoastUnavailableError` with a `reason`; transports branch
+on that reason. Do not import `@anthropic-ai/sdk` anywhere else — that boundary is the
+point, and `tests/anthropic-contract.test.ts` guards the class hierarchy it relies on.
 
-`config.ts` calls `process.exit(1)` at import time when a required variable is missing.
-Anything importing it transitively (which is nearly everything) will kill the process
-without `DISCORD_TOKEN` and `ANTHROPIC_API_KEY` set. Tests mock `src/config.js` (at whatever relative depth) rather
-than setting env vars, except `tests/config.test.ts`, which mocks `dotenv/config` and spies
-on `process.exit` so a developer's local `.env` cannot influence the result.
+`config.ts` exports `requireEnv` (throws `MissingConfigError`), `optionalEnv`, and
+`failFast` for CLI entrypoints. It must **not** `process.exit` at import: in Lambda that
+turns a fixable configuration mistake into a container crash. `generate.ts` builds its
+Anthropic client lazily for the same reason.
 
 ## The Claude API call
 
@@ -96,10 +128,12 @@ module under test is loaded, which means the module under test is pulled in with
 `await import('../src/x.js')`, never a static import. Copy the shape from an existing test
 file rather than inventing a new one.
 
-`getMember()` can return either a `GuildMember` (with a `displayName` getter) or a raw
-`APIInteractionDataResolvedGuildMember` (with `nick`). `resolveDisplayName` in
-`commands/roast/handler.ts` handles both; it uses an `in` check rather than `instanceof`
-so plain object fixtures work in tests.
+Display-name resolution lives in each transport and must stay consistent between them:
+nickname, then global display name, then username. `bot/gateway.ts` handles discord.js's
+two member shapes (`GuildMember` with a `displayName` getter, or a raw
+`APIInteractionDataResolvedGuildMember` with `nick`) using an `in` check rather than
+`instanceof`, so plain object fixtures work in tests. `lambda/interaction.ts` does the
+same job from the raw JSON maps.
 
 ## CI
 

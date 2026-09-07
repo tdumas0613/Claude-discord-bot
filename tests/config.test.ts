@@ -3,22 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 // Neutralize dotenv so a developer's local .env cannot influence these tests.
 jest.unstable_mockModule('dotenv/config', () => ({}));
 
-const ENV_KEYS = [
-  'DISCORD_TOKEN',
-  'ANTHROPIC_API_KEY',
-  'DISCORD_CLIENT_ID',
-  'DISCORD_GUILD_ID',
-] as const;
+const { MissingConfigError, failFast, optionalEnv, requireEnv } = await import(
+  '../src/config.js'
+);
+
+const ENV_KEYS = ['DISCORD_TOKEN', 'ANTHROPIC_API_KEY', 'DISCORD_CLIENT_ID', 'DISCORD_GUILD_ID'] as const;
 
 type EnvKey = (typeof ENV_KEYS)[number];
 
 const originalEnv: Partial<Record<EnvKey, string | undefined>> = {};
-
-/** Imports a fresh copy of config.ts against the current environment. */
-async function importConfig(): Promise<typeof import('../src/config.js')> {
-  jest.resetModules();
-  return import('../src/config.js');
-}
 
 beforeEach(() => {
   for (const key of ENV_KEYS) {
@@ -44,55 +37,72 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-describe('config', () => {
-  it('exports the required credentials', async () => {
+describe('requireEnv', () => {
+  it('returns the value when it is set', () => {
     process.env.DISCORD_TOKEN = 'discord-token';
-    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
 
-    const config = await importConfig();
-
-    expect(config.DISCORD_TOKEN).toBe('discord-token');
-    expect(config.ANTHROPIC_API_KEY).toBe('anthropic-key');
+    expect(requireEnv('DISCORD_TOKEN')).toBe('discord-token');
   });
 
-  it('defaults the optional variables to null', async () => {
-    process.env.DISCORD_TOKEN = 'discord-token';
-    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
-
-    const config = await importConfig();
-
-    expect(config.DISCORD_CLIENT_ID).toBeNull();
-    expect(config.DISCORD_GUILD_ID).toBeNull();
+  it('throws rather than exiting, so Lambda can turn it into a response', () => {
+    expect(() => requireEnv('DISCORD_TOKEN')).toThrow(MissingConfigError);
   });
 
-  it('reads the optional variables when they are set', async () => {
-    process.env.DISCORD_TOKEN = 'discord-token';
-    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
-    process.env.DISCORD_CLIENT_ID = 'client-id';
+  it('names the missing variable on the error', () => {
+    try {
+      requireEnv('ANTHROPIC_API_KEY');
+      throw new Error('expected requireEnv to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(MissingConfigError);
+      expect((error as InstanceType<typeof MissingConfigError>).variable).toBe('ANTHROPIC_API_KEY');
+    }
+  });
+
+  it('treats an empty value as missing', () => {
+    process.env.DISCORD_TOKEN = '';
+
+    expect(() => requireEnv('DISCORD_TOKEN')).toThrow(MissingConfigError);
+  });
+});
+
+describe('optionalEnv', () => {
+  it('returns the value when it is set', () => {
     process.env.DISCORD_GUILD_ID = 'guild-id';
 
-    const config = await importConfig();
-
-    expect(config.DISCORD_CLIENT_ID).toBe('client-id');
-    expect(config.DISCORD_GUILD_ID).toBe('guild-id');
+    expect(optionalEnv('DISCORD_GUILD_ID')).toBe('guild-id');
   });
 
-  it.each(['DISCORD_TOKEN', 'ANTHROPIC_API_KEY'] as const)(
-    'exits when %s is missing',
-    async (missing) => {
-      process.env.DISCORD_TOKEN = 'discord-token';
-      process.env.ANTHROPIC_API_KEY = 'anthropic-key';
-      delete process.env[missing];
+  it('returns null when it is unset', () => {
+    expect(optionalEnv('DISCORD_GUILD_ID')).toBeNull();
+  });
 
-      await expect(importConfig()).rejects.toThrow('process.exit(1)');
-      expect(console.error).toHaveBeenCalledWith(expect.stringContaining(missing));
-    },
-  );
+  it('returns null when it is empty', () => {
+    process.env.DISCORD_GUILD_ID = '';
 
-  it('treats an empty value as missing', async () => {
-    process.env.DISCORD_TOKEN = '';
-    process.env.ANTHROPIC_API_KEY = 'anthropic-key';
+    expect(optionalEnv('DISCORD_GUILD_ID')).toBeNull();
+  });
+});
 
-    await expect(importConfig()).rejects.toThrow('process.exit(1)');
+describe('failFast', () => {
+  it('passes the value through when nothing is missing', () => {
+    process.env.DISCORD_TOKEN = 'discord-token';
+
+    expect(failFast(() => requireEnv('DISCORD_TOKEN'))).toBe('discord-token');
+  });
+
+  it('exits with the message a CLI user needs', () => {
+    expect(() => failFast(() => requireEnv('DISCORD_TOKEN'))).toThrow('process.exit(1)');
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Missing required environment variable DISCORD_TOKEN'),
+    );
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('.env.example'));
+  });
+
+  it('rethrows anything that is not a configuration problem', () => {
+    expect(() =>
+      failFast(() => {
+        throw new Error('something else entirely');
+      }),
+    ).toThrow('something else entirely');
   });
 });

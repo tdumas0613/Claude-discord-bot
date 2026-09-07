@@ -122,44 +122,51 @@ Everything below is for people reading or changing the code.
 
 ## How a roast happens
 
-`bot/index.ts` logs in and hands every interaction to the registry in `commands/index.ts`,
-which matches the command name and calls that command's `execute`. For `/roast` that is
-`commands/roast/handler.ts`: it works out which name to use and defers the reply — Discord
-wants an acknowledgement within three seconds, and the API call takes longer — then calls
-`commands/roast/generate.ts` and posts whatever comes back.
+The command logic does not know how it was invoked. A *transport* turns whatever arrived
+into a `CommandRequest` — resolving which display name to roast — and turns the returned
+`CommandReply` back into something Discord understands. There are two:
+
+- **Gateway** (`bot/`), for local development: holds a WebSocket, defers the reply, and
+  edits it once the roast is ready. This is what `npm start` runs.
+- **HTTP interactions** (`lambda/`), for AWS: Discord posts to a Function URL. Because
+  the reply is due within three seconds and a roast takes longer, one function verifies
+  the signature and acknowledges, and a second does the work and edits the reply
+  afterwards using the interaction token.
 
 ```
 src/
-  bot/
+  bot/                          the Discord gateway transport (local development)
     index.ts                    entrypoint: creates the client, logs in
+    gateway.ts                  discord.js interaction -> command -> reply
     register-slash-commands.ts  entrypoint: npm run register
-  commands/
-    index.ts                    registry + router: name -> command
-    types.ts                    the BotCommand shape each command exports
-    roast/
-      index.ts                  the command as the registry sees it
-      command.ts                slash command definition
-      handler.ts                runs /roast, formats replies
-      generate.ts               the Claude API call
-      prompt.ts                 the system prompt
+  lambda/                       the HTTP-interactions transport (AWS)
+    responder.ts                verify signature, PONG, defer, hand off
+    worker.ts                   run the command, edit the deferred reply
+    signature.ts                Ed25519 verification, no dependencies
+    interaction.ts              raw Discord JSON -> command request
+    discord-api.ts              the follow-up PATCH
+  commands/                     transport-agnostic command logic
+    index.ts                    registry: name -> command
+    types.ts                    CommandRequest / CommandReply / BotCommand
+    roast/                      index · command · handler · generate · prompt
   config.ts                     environment variables
 ```
 
 Adding a second command is: a new folder under `commands/`, exporting a `BotCommand`
 from its `index.ts`, plus one line in `commands/index.ts`. Nothing else changes.
 
-`src/bot/` holds the two entrypoints — they act on import (logging in, calling Discord's
-REST API), which is exactly why everything else lives outside them and can be imported by a
-test without touching the network. Worth preserving.
+Entrypoints act on import — logging in, calling Discord's REST API, reading AWS config —
+which is why everything else lives outside them and can be imported by a test without
+touching the network. Worth preserving.
 
 The Anthropic SDK is imported in exactly one file, `commands/roast/generate.ts`. It
 translates SDK exceptions into a `RoastUnavailableError` carrying a `reason`, so the
 Discord-facing code never sees a vendor type.
 
-Picking the name to roast is fiddlier than it looks: Discord may hand back either a full
-`GuildMember` with a `displayName` getter, or a raw resolved member carrying `nick`.
-`resolveDisplayName` handles both, then falls back to the global display name and finally
-the username.
+Picking the name to roast is fiddlier than it looks, and each transport does it from a
+different shape: the gateway from discord.js objects (which come as either a `GuildMember`
+with a `displayName` getter or a raw resolved member carrying `nick`), Lambda from the raw
+`resolved` JSON. Both apply the same precedence — nickname, global display name, username.
 
 ## The Claude API call
 
