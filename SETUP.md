@@ -215,6 +215,143 @@ commands — you do not need `npm start` running any more.
 
 ---
 
+## Part 6 — Deploy from GitHub Actions (optional)
+
+Part 5 deploys one stack from your laptop. This replaces that with a **Deployment
+Pipeline** workflow that deploys two stacks — `dev` then `prod` — into **us-east-2**,
+authenticating with short-lived OIDC credentials rather than stored AWS keys.
+
+The pipeline is manual: run it from the Actions tab on whatever branch you like. It runs
+the CI checks once, deploys dev, then waits for a human before prod.
+
+Both stacks live in the same AWS account, told apart by stack name and secret path:
+
+| | dev | prod |
+|---|---|---|
+| Stack | `ClaudeDiscordRoastBot-dev` | `ClaudeDiscordRoastBot-prod` |
+| Secret | `claude-discord-roast-bot/dev/anthropic-api-key` | `…/prod/…` |
+
+Both use the **same Discord application**, so only one of the two Function URLs can be
+registered as the Interactions Endpoint — prod's. The dev stack is reached by sending it
+signed requests directly, not through Discord.
+
+### One-time AWS setup
+
+**1. Bootstrap CDK** for the account and region, if you have not already:
+
+```bash
+npx cdk bootstrap aws://<account-id>/us-east-2
+```
+
+**2. Register GitHub as an OIDC identity provider.** This is what lets a workflow prove
+which repository it is running in, so no AWS keys need to exist in GitHub at all:
+
+```bash
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+```
+
+**3. Create the deploy role.** The trust policy is scoped to the two environments rather
+than to a branch — the pipeline runs from any branch, but only ever from these two
+environments, and GitHub puts that in the token's `sub` claim:
+
+```bash
+cat > trust.json <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": [
+          "repo:tdumas0613/Claude-discord-bot:environment:dev",
+          "repo:tdumas0613/Claude-discord-bot:environment:prod"
+        ]
+      }
+    }
+  }]
+}
+JSON
+
+aws iam create-role \
+  --role-name GitHubActionsDeploy \
+  --assume-role-policy-document file://trust.json
+```
+
+**4. Give it only what it needs.** Not `AdministratorAccess`: CDK's bootstrap already
+created roles that hold the deploy permissions, so this role only needs to assume those,
+plus Secrets Manager for the API key sync.
+
+```bash
+cat > policy.json <<'JSON'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::<account-id>:role/cdk-hnb659fds-*-<account-id>-us-east-2"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:us-east-2:<account-id>:secret:claude-discord-roast-bot/*"
+    }
+  ]
+}
+JSON
+
+aws iam put-role-policy \
+  --role-name GitHubActionsDeploy \
+  --policy-name DeployBotStacks \
+  --policy-document file://policy.json
+```
+
+Note the role ARN it prints — the next step needs it.
+
+### One-time GitHub setup
+
+Under **Settings → Secrets and variables → Actions**, add three *variables* (not
+secrets — a client ID and a public key are public by design, and a role ARN is not
+sensitive):
+
+| Variable | Value |
+|---|---|
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::<account-id>:role/GitHubActionsDeploy` |
+| `DISCORD_CLIENT_ID` | Application ID, from General Information |
+| `DISCORD_PUBLIC_KEY` | Public Key, from General Information |
+
+Under **Settings → Environments**, in each of `dev` and `prod`, add a secret named
+`ANTHROPIC_API_KEY`. The pipeline copies each environment's value into that
+environment's Secrets Manager secret before deploying.
+
+Then, on the **`prod` environment only**, add yourself under **Required reviewers**.
+**This is what makes prod wait for you.** Without it the pipeline still works, it simply
+runs prod straight after dev with no pause.
+
+### Running it
+
+Actions → **Deployment Pipeline** → Run workflow, pick a branch, run.
+
+Checks run once, dev deploys, and the run then stops at "Review deployments" until you
+approve prod. Each deploy prints its stack outputs — including the interactions endpoint
+URL — to the run summary.
+
+Only prod's URL goes in the Developer Portal. The first prod deploy needs that pasted in
+per Part 5, step 3; after that the URL is stable and redeploys do not change it.
+
+---
+
 ## Troubleshooting
 
 **`/roast` doesn't appear in the command menu.**
@@ -267,6 +404,25 @@ Requests are refused if their timestamp is more than five minutes from the funct
 clock, which stops a captured request being replayed. Lambda's clock is managed by AWS,
 so in practice this only fires on a genuine replay — but it is what to suspect if signed
 requests are being rejected and the public key is definitely right.
+
+**The pipeline fails at "Configure AWS credentials".**
+The OIDC trust policy does not match. It is scoped to
+`repo:<owner>/<repo>:environment:dev` and `:environment:prod`, so check the repository
+name matches exactly, and that `AWS_DEPLOY_ROLE_ARN` points at the role you created.
+
+**The pipeline deployed prod without asking.**
+The `prod` environment has no required reviewer. Settings → Environments → prod →
+Required reviewers.
+
+**A deploy fails on minimum unreserved concurrency.**
+Each stack reserves 30 concurrent executions, so both together reserve 60, and AWS
+requires 100 to stay unreserved. On an account with a low limit, deploy only one
+environment or raise the quota — see the note in Part 5.
+
+**`/roast` works in prod but the dev stack seems dead.**
+Expected. Both environments share one Discord application, and an application has exactly
+one Interactions Endpoint URL, which points at prod. Reach dev by sending signed requests
+to its own Function URL, printed in the pipeline's run summary.
 
 **`Cannot find module ... /src/config.js`**
 You ran a file in `src/` directly. Always use `npm start` and `npm run register`, which

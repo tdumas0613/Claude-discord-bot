@@ -229,7 +229,7 @@ Two more things keep an unattended deployment cheap and quiet:
   vanishing. Nothing polls it — it is where to look when a reply never arrives.
 
 Running this costs nothing at hobby volume except Secrets Manager, which is about
-$0.40/month. Lambda's free tier (1M requests and 400,000 GB-seconds monthly) does not
+$0.40/month per environment — so $0.80 with dev and prod both deployed. Lambda's free tier (1M requests and 400,000 GB-seconds monthly) does not
 expire after a year, Function URLs carry no charge of their own, and the log groups and
 queue sit inside their free allowances.
 
@@ -254,6 +254,27 @@ DISCORD_CLIENT_ID=... DISCORD_PUBLIC_KEY=... npm run deploy --prefix infra
 
 Neither of those is a secret — the client ID is public, and the public key exists to be
 published — which is why they are plain environment variables and the API key is not.
+
+Everything lands in **us-east-2**, pinned in `infra/bin/app.ts` rather than taken from
+whatever region your credentials happen to resolve to. A region that resolves wrongly is
+silent: you get a second complete bot in another region, with its own URL that Discord
+knows nothing about. Override deliberately with `REGION=eu-west-1` if you ever need to.
+
+### The Deployment Pipeline
+
+`.github/workflows/deploy.yml` does the above from CI instead, for two environments.
+It is manual — Actions → Deployment Pipeline → Run workflow, from any branch — and runs
+the CI checks once, deploys `ClaudeDiscordRoastBot-dev`, then waits for a human to
+approve before deploying `ClaudeDiscordRoastBot-prod`.
+
+It authenticates with OIDC, so no AWS keys are stored in GitHub, and it copies each
+environment's `ANTHROPIC_API_KEY` secret into that environment's Secrets Manager secret
+before deploying — the worker reads from Secrets Manager, but GitHub is where the value
+is kept.
+
+Both environments share one Discord application, so only prod's Function URL is
+registered as the interactions endpoint; dev is reached by sending it signed requests
+directly. `SETUP.md` Part 6 covers the one-time OIDC and repository setup.
 
 ## The Claude API call
 

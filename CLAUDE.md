@@ -165,6 +165,45 @@ them.
 every CDK upgrade without telling us anything. It stubs bundling with the
 `aws:cdk:bundling-stacks: []` context so the tests do not run esbuild.
 
+**The region is pinned to `us-east-2` in `bin/app.ts`, not read from
+`CDK_DEFAULT_REGION`.** That variable is whatever the CDK CLI resolved from ambient
+credentials, and with no region configured it quietly becomes us-east-1 — which deploys a
+complete second bot, with its own Function URL, that Discord never calls and nobody looks
+at. Override explicitly with `-c REGION=…` or `REGION=…`. The `infra` CI job asserts the
+synthesized manifest says us-east-2, so removing the pin fails the build.
+
+The account is still ambient (`CDK_DEFAULT_ACCOUNT`), and stays undefined without
+credentials so `cdk synth` works in CI. A partially specified environment is valid CDK.
+
+### Deployment
+
+`.github/workflows/deploy.yml` ("Deployment Pipeline") is `workflow_dispatch` only,
+runnable from any branch. It calls `ci.yml` once, deploys dev, then deploys prod — which
+pauses for a human because the job declares `environment: prod` and that environment has
+a required reviewer. CI is deliberately *not* re-run before prod: same commit, and dev
+deploying already proved the build.
+
+Two stacks in one account, `ClaudeDiscordRoastBot-dev` and `-prod`, told apart by
+`STACK_NAME` and `ANTHROPIC_SECRET_NAME`. Both share one Discord application, so only
+prod's Function URL is registered as the interactions endpoint.
+
+The deploy steps live in a composite action, `.github/actions/deploy-stack/action.yml`,
+so they are written once rather than per environment. Two things there are load-bearing:
+
+- It runs `npm ci` at the **root** as well as in `infra/`. The root install is what
+  provides esbuild, per the note above.
+- It upserts the environment's `ANTHROPIC_API_KEY` into Secrets Manager *before*
+  deploying. A stack whose secret is missing deploys perfectly green and fails only at
+  runtime, as a reply that never arrives.
+
+Authentication is OIDC — no AWS keys in GitHub. The role's trust policy is scoped to
+`repo:<owner>/<repo>:environment:dev|prod`, which works precisely because both deploy
+jobs declare an `environment:`. Keep that, or the role stops trusting the pipeline.
+
+`ci.yml` carries `workflow_call:` so the pipeline can reuse it. Its concurrency group
+includes `github.workflow` because in a called run that resolves to the *caller's* name —
+without it, a deploy and a push on the same branch share a group and cancel each other.
+
 ## The Claude API call
 
 In `src/commands/roast/generate.ts`. Read the `claude-api` skill before changing it —

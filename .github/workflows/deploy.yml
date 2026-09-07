@@ -1,0 +1,87 @@
+name: Deployment Pipeline
+
+# Manual only, from any branch. Deploys are a decision, not a consequence of
+# pushing — and prod is gated on a human besides.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+
+jobs:
+  # One run of the same checks CI runs on a push. Not repeated before prod:
+  # it is the same commit, so dev deploying already proved the build.
+  ci:
+    name: Checks
+    uses: ./.github/workflows/ci.yml
+
+  deploy-dev:
+    name: Deploy dev
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: dev
+
+    # Per environment rather than per workflow. A workflow-level group would
+    # let a run parked on the prod approval block every other dispatch.
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      # Lets GitHub mint the OIDC token AWS trades for temporary credentials.
+      # No long-lived AWS keys are stored anywhere.
+      id-token: write
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Deploy the dev stack
+        uses: ./.github/actions/deploy-stack
+        with:
+          environment: dev
+          stack-name: ClaudeDiscordRoastBot-dev
+          secret-name: claude-discord-roast-bot/dev/anthropic-api-key
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          discord-client-id: ${{ vars.DISCORD_CLIENT_ID }}
+          discord-public-key: ${{ vars.DISCORD_PUBLIC_KEY }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  deploy-prod:
+    name: Deploy prod
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    # The pause happens here: with a required reviewer on the prod environment,
+    # the run stops and waits for a human before this job starts. That rule
+    # lives in Settings > Environments, not in this file — without it, prod
+    # follows dev straight through.
+    environment: prod
+
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Deploy the prod stack
+        uses: ./.github/actions/deploy-stack
+        with:
+          environment: prod
+          stack-name: ClaudeDiscordRoastBot-prod
+          secret-name: claude-discord-roast-bot/prod/anthropic-api-key
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          discord-client-id: ${{ vars.DISCORD_CLIENT_ID }}
+          discord-public-key: ${{ vars.DISCORD_PUBLIC_KEY }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

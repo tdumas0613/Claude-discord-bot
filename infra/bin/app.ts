@@ -10,6 +10,18 @@ import { BotStack } from '../lib/bot-stack';
  * variables `.env` already uses locally.
  */
 
+/**
+ * Every environment deploys here.
+ *
+ * Deliberately not `CDK_DEFAULT_REGION`. That variable is whatever the CLI
+ * resolved from ambient credentials, and when nothing configures a region it
+ * quietly becomes us-east-1 — deploying a second, invisible copy of the bot
+ * with its own Function URL that Discord knows nothing about. Failing to
+ * notice costs more than being unable to override, so overriding is explicit:
+ * `-c REGION=…` or `REGION=…`.
+ */
+const DEFAULT_REGION = 'us-east-2';
+
 const app = new App();
 
 function required(name: string): string {
@@ -30,14 +42,13 @@ new BotStack(app, optional('STACK_NAME', 'ClaudeDiscordRoastBot'), {
   discordClientId: required('DISCORD_CLIENT_ID'),
   discordPublicKey: required('DISCORD_PUBLIC_KEY'),
   anthropicSecretName: optional('ANTHROPIC_SECRET_NAME', 'claude-discord-roast-bot/anthropic-api-key'),
-  // Resolved from the ambient CLI credentials at deploy time. Left undefined
-  // when unset so `cdk synth` works in CI without an AWS account.
-  env:
-    process.env['CDK_DEFAULT_ACCOUNT'] && process.env['CDK_DEFAULT_REGION']
-      ? {
-          account: process.env['CDK_DEFAULT_ACCOUNT'],
-          region: process.env['CDK_DEFAULT_REGION'],
-        }
-      : undefined,
+  env: {
+    // The account comes from whichever credentials are in use, and stays
+    // undefined without them so `cdk synth` still works in CI. The region does
+    // not get that treatment — see DEFAULT_REGION. A partially specified
+    // environment is valid CDK.
+    account: process.env['CDK_DEFAULT_ACCOUNT'],
+    region: optional('REGION', DEFAULT_REGION),
+  },
   description: 'Discord /roast bot: HTTP interactions responder + roast worker',
 });

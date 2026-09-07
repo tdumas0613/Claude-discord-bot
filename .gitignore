@@ -22,8 +22,9 @@ dist/
 build/
 coverage/
 
-# CDK synth output and staged bundles
+# CDK synth output, staged bundles, and deploy outputs
 infra/cdk.out/
+infra/cdk-outputs.json
 .cdk.staging/
 .cache/
 *.tsbuildinfo
