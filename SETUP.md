@@ -164,8 +164,9 @@ After a few seconds the bot replies with a roast, mentioning the person.
 Parts 1–4 keep a process running on your machine. This part moves the bot to Lambda, so
 it runs only when someone uses it and there is nothing to keep alive.
 
-You need the AWS CLI configured with credentials, and an account that has been
-bootstrapped for CDK (`npx cdk bootstrap`, once per account and region).
+You need the AWS CLI signed in (`aws login`) and an account that has been bootstrapped
+for CDK (`npx cdk bootstrap`, once per account and region). Without an active sign-in,
+CDK fails with `no credentials have been configured`.
 
 **1. Put the Anthropic key in Secrets Manager.**
 
@@ -237,13 +238,26 @@ signed requests directly, not through Discord.
 
 ### One-time AWS setup
 
-**1. Bootstrap CDK** for the account and region, if you have not already:
+**1. Sign in to AWS.** Every command in this section needs credentials, and a sign-in
+expires — so do this first, and again whenever you come back to it:
+
+```bash
+aws login
+aws sts get-caller-identity   # should print the account you are about to bootstrap
+```
+
+Skipping this is the usual cause of
+`Need to perform AWS calls for account ..., but no credentials have been configured`.
+That error means the credential chain found *nothing* — it is not a permissions problem,
+and an expired sign-in looks exactly the same as never having signed in.
+
+**2. Bootstrap CDK** for the account and region, if you have not already:
 
 ```bash
 npx cdk bootstrap aws://<account-id>/us-east-2
 ```
 
-**2. Register GitHub as an OIDC identity provider.** This is what lets a workflow prove
+**3. Register GitHub as an OIDC identity provider.** This is what lets a workflow prove
 which repository it is running in, so no AWS keys need to exist in GitHub at all:
 
 ```bash
@@ -252,7 +266,7 @@ aws iam create-open-id-connect-provider \
   --client-id-list sts.amazonaws.com
 ```
 
-**3. Create the deploy role.** The trust policy is scoped to the two environments rather
+**4. Create the deploy role.** The trust policy is scoped to the two environments rather
 than to a branch — the pipeline runs from any branch, but only ever from these two
 environments, and GitHub puts that in the token's `sub` claim:
 
@@ -284,7 +298,7 @@ aws iam create-role \
   --assume-role-policy-document file://trust.json
 ```
 
-**4. Give it only what it needs.** Not `AdministratorAccess`: CDK's bootstrap already
+**5. Give it only what it needs.** Not `AdministratorAccess`: CDK's bootstrap already
 created roles that hold the deploy permissions, so this role only needs to assume those,
 plus Secrets Manager for the API key sync.
 
